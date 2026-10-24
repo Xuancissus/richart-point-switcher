@@ -70,10 +70,10 @@
 html { font-size: 17px; }
 @supports (font: -apple-system-body) { html { font: -apple-system-body; } }
 
-/* ===== Components (Layout: phone-first single column; on wide screens the verdict sits sticky on the right like a receipt beside the list) ===== */
+/* ===== Components (Layout: phone-first single column; on wide screens the verdict sits on the right beside the list) ===== */
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{background:var(--bg);color:var(--label);font-family:var(--font-body);font-size:var(--fs-body);line-height:var(--lh-body);-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--label);font-family:var(--font-body);font-size:var(--fs-body);line-height:var(--lh-body);-webkit-text-size-adjust:100%}
 .wrap{max-width:1080px;margin:0 auto;padding-block:var(--sp-5) 48px;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 h1,h2,h3{margin:0;text-wrap:balance;line-height:var(--lh-tight)}
@@ -84,10 +84,17 @@ button,input,select{font:inherit;color:inherit}
 
 /* Banner: full-width red band with white text; the inner wrapper carries the side gutter */
 .banner{background:var(--banner-bg);color:var(--on-tint)}
-.banner-in{max-width:1080px;margin:0 auto;display:grid;gap:var(--sp-1);padding-block:var(--sp-5);
+.banner-in{max-width:1080px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--sp-3);row-gap:var(--sp-1);align-items:center;
+  padding-top:calc(var(--sp-5) + env(safe-area-inset-top,0px));padding-bottom:var(--sp-5);
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 .banner .eyebrow{color:var(--on-tint)}
 .banner h1{font-size:var(--fs-title);font-weight:700}
+.banner .eyebrow,.banner h1,.banner .upd-msg{grid-column:1}
+/* Update check: same text-button style as .linkbtn, in white on the red band */
+.banner .linkbtn{grid-column:2;grid-row:1 / span 2;color:var(--on-tint);text-decoration:underline;text-underline-offset:3px}
+.banner :focus-visible{outline-color:var(--on-tint)}
+.upd-msg{margin:0;font-size:var(--fs-footnote)}
+.upd-msg button{margin-left:var(--sp-2);padding:0;font-size:inherit}
 .banner .sub{margin:0;font-size:var(--fs-subhead);max-width:60ch}
 .dayhead{display:grid;gap:var(--sp-2);margin-bottom:var(--sp-5)}
 .dateline{display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;margin-top:var(--sp-1)}
@@ -114,8 +121,7 @@ button,input,select{font:inherit;color:inherit}
 
 .grid{display:grid;gap:var(--sp-5);grid-template-areas:"items" "verdict" "lookup" "settings" "notes"}
 @media (min-width:880px){
-  .grid{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);grid-template-areas:"items verdict" "lookup verdict" "settings verdict" "notes notes";align-items:start}
-  #verdict{position:sticky;top:calc(env(safe-area-inset-top,0px) + 16px)}
+  .grid{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);grid-template-areas:"items verdict" "lookup verdict" "settings verdict" "notes .";align-items:start}
 }
 section{min-width:0}
 .panel{background:var(--surface);border:var(--hairline) solid var(--separator);border-radius:var(--r-card);padding:var(--sp-4)}
@@ -273,7 +279,7 @@ td.m{color:var(--warn)}
 /* Notes */
 #notes{grid-area:notes}
 #notes h2{font-size:var(--fs-body);margin-bottom:var(--sp-2)}
-#notes ul{margin:0;padding-left:1.2em;display:grid;gap:var(--sp-1);font-size:var(--fs-footnote);color:var(--label-2);max-width:80ch}
+#notes ul{margin:0;padding-left:1.2em;display:grid;gap:var(--sp-1);font-size:var(--fs-footnote);color:var(--label-2)}
 #notes a{color:var(--tint)}
 .disclaim{margin:var(--sp-3) 0 0;font-size:var(--fs-caption);color:var(--label-2)}
 
@@ -284,6 +290,8 @@ td.m{color:var(--warn)}
 <header class="banner"><div class="banner-in">
   <p class="eyebrow">台新 Richart 卡 · 規則抓取日 2026/10/23</p>
   <h1>權益聰明切</h1>
+  <button type="button" class="linkbtn" id="updBtn">檢查更新</button>
+  <p class="upd-msg" id="updMsg" aria-live="polite" hidden></p>
 </div></header>
 
 <div class="wrap">
@@ -1206,6 +1214,34 @@ makeSearch($('lookSearch'), $('lookSugg'), m => { lookupMerchant = m; renderMatr
 
 lookupMerchant = BY_NAME.get('一般餐廳（實體店）');
 renderAll();
+
+// ---------- Update check ----------
+// The page cannot read Taishin's site itself (the browser blocks it), so this only checks whether
+// a newer version of this tool, with updated rules, has been published next to it (version.json).
+const APP_VERSION = '2026.10.24-2';
+$('updBtn').addEventListener('click', async () => {
+  const msg = $('updMsg'), btn = $('updBtn');
+  msg.hidden = false; msg.textContent = '檢查中…'; btn.disabled = true;
+  try {
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    const v = await res.json();
+    if (v.version === APP_VERSION) {
+      msg.textContent = `已是最新版本（規則抓取日 ${v.rules}）`;
+    } else {
+      msg.textContent = `有新版本（規則抓取日 ${v.rules}）`;
+      const go = document.createElement('button');
+      go.type = 'button'; go.className = 'linkbtn'; go.textContent = '立即更新';
+      // A new query string skips the browser's cached copy of the page; saved records are kept
+      go.addEventListener('click', () => location.replace(location.pathname + '?v=' + encodeURIComponent(v.version)));
+      msg.append(go);
+    }
+  } catch (e) {
+    msg.textContent = '無法檢查更新，請確認網路後再試一次';
+  } finally {
+    btn.disabled = false;
+  }
+});
 </script>
 
 </body>
