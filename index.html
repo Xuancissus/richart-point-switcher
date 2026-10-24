@@ -1,0 +1,1212 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="台新 Richart 卡切換刷試算：記錄今天的消費，算出 23:59 前該切換哪個方案。個人工具，非台新銀行官方服務。">
+<meta name="referrer" content="no-referrer">
+<title>權益聰明切</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23D70C18'/%3E%3Cpath d='M9 16.5l5 5 9-11' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+/* Number font is served from this site (no Google Fonts request, so visitors' IPs are not sent to Google).
+   IBM Plex Mono, Latin subset, SIL Open Font License 1.1 (fonts/OFL.txt). Chinese uses the device's system font. */
+@font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:500;font-display:swap;src:url(fonts/plex-mono-500.woff2) format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:600;font-display:swap;src:url(fonts/plex-mono-600.woff2) format("woff2")}
+/* 今天切哪個刷 · Design tokens（方向 A：白底帳單）v1.3 · 2026-10-23
+   Every color, size and radius on the page comes from these variables.
+   Color sources: Taishin Bank website CSS (fetched 2026-10-23); values marked "derived" were tuned for contrast. */
+
+:root {
+  /* ---- Color: light only (Taishin's websites have no dark theme, so neither does this tool) ---- */
+  color-scheme: light;
+  --bg:         #F2F2F2;  /* page background, input fields (Taishin site gray) */
+  --surface:    #F9F9F9;  /* cards, list rows: light gray instead of white (Taishin site gray) */
+  --label:      #333333;  /* primary text            12.0:1 on surface */
+  --label-2:    #666666;  /* secondary text (derived) 5.45:1 on surface, 5.13:1 on bg */
+  --label-3:    #9B9B9B;  /* icons, disabled only — never body text (2.78:1) */
+  --separator:  #E3E3E3;  /* hairlines, input borders */
+  --tint:       #D70C18;  /* Taishin red: the answer, links  5.04:1 on surface */
+  --tint-fill:  #D70C18;  /* bars and filled marks */
+  --tint-soft:  #FCE8E9;  /* bar track, highlight background (derived) */
+  --on-tint:    #FFFFFF;  /* text on tint-fill        5.31:1 */
+  --warn:       #9A5800;  /* warnings, "unconfirmed rule" (derived) 5.57:1 */
+  --warn-soft:  #FFF4E0;  /* warning background (derived) */
+  --verdict-border: #E3E3E3;  /* verdict card outline (= separator in light) */
+  --verdict-eyebrow: #666666; /* "今天建議切換" label (= label-2) */
+  --pts-pos:    #333333;  /* earned points in the list (= label in light) */
+  --banner-bg:  #D70C18;  /* banner band; white text on it 5.31:1 */
+
+  /* ---- Type ---- */
+  --font-body: "PingFang TC", "Heiti TC", "Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans TC", system-ui, sans-serif;
+  --font-num:  "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --fs-title:    1.647rem;  /* 28px  page title, recommended plan */
+  --fs-title2:   1.294rem;  /* 22px  total points */
+  --fs-title3:   1.176rem;  /* 20px  section titles */
+  --fs-body:     1rem;      /* 17px  body text */
+  --fs-callout:  0.941rem;  /* 16px  all inputs, selects, search + suggestions, 今日消費 rows (min 16px: iPhone focus zoom) */
+  --fs-subhead:  0.882rem;  /* 15px  amount, payment, ranking */
+  --fs-footnote: 0.765rem;  /* 13px  details, notes */
+  --fs-caption:  0.706rem;  /* 12px  column headers, eyebrows (minimum size) */
+  --lh-body: 1.65;
+  --lh-tight: 1.25;
+
+  /* ---- Space (4px base) ---- */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+
+  /* ---- Shape ---- */
+  --r-card: 12px; --r-control: 10px; --r-bar: 5px; --r-pill: 999px;
+  --hairline: 1px;
+  --tap: 44px;              /* minimum touch target (Apple HIG) */
+  --shadow-pop: 0 6px 20px rgb(0 0 0 / .12);  /* floating lists only */
+}
+
+
+/* ---- Increased contrast (iOS: Settings > Accessibility > Increase Contrast) ---- */
+@media (prefers-contrast: more) {
+  :root { --label: #1A1A1A; --label-2: #555555; --separator: #C7C7C7; --tint: #B20A14; --tint-fill: #B20A14; --banner-bg: #B20A14; }
+}
+
+/* ---- Base: follow iOS Dynamic Type (text size setting) where supported ---- */
+html { font-size: 17px; }
+@supports (font: -apple-system-body) { html { font: -apple-system-body; } }
+
+/* ===== Components (Layout: phone-first single column; on wide screens the verdict sits sticky on the right like a receipt beside the list) ===== */
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--label);font-family:var(--font-body);font-size:var(--fs-body);line-height:var(--lh-body);-webkit-text-size-adjust:100%}
+.wrap{max-width:1080px;margin:0 auto;padding-block:var(--sp-5) 48px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,h3{margin:0;text-wrap:balance;line-height:var(--lh-tight)}
+.eyebrow{margin:0;font-size:var(--fs-caption);letter-spacing:.06em;color:var(--label-2)}
+.num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+
+/* Banner: full-width red band with white text; the inner wrapper carries the side gutter */
+.banner{background:var(--banner-bg);color:var(--on-tint)}
+.banner-in{max-width:1080px;margin:0 auto;display:grid;gap:var(--sp-1);padding-block:var(--sp-5);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.banner .eyebrow{color:var(--on-tint)}
+.banner h1{font-size:var(--fs-title);font-weight:700}
+.banner .sub{margin:0;font-size:var(--fs-subhead);max-width:60ch}
+.dayhead{display:grid;gap:var(--sp-2);margin-bottom:var(--sp-5)}
+.dateline{display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;margin-top:var(--sp-1)}
+.dateline input[type=date]{min-height:var(--tap);border:var(--hairline) solid var(--separator);border-radius:var(--r-control);background:var(--surface);padding:0 var(--sp-3);font-family:var(--font-num);font-size:max(16px,var(--fs-callout));font-variant-numeric:tabular-nums}
+.tag{font-size:var(--fs-caption);padding:var(--sp-1) var(--sp-3);border-radius:var(--r-pill);background:var(--surface);border:var(--hairline) solid var(--separator);color:var(--label-2)}
+.tag.on{background:var(--tint-soft);border-color:transparent;color:var(--tint);font-weight:500}
+.day{margin:0;font-size:var(--fs-footnote);color:var(--warn)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.chev{flex:none;color:var(--label-2)}
+@media (prefers-reduced-motion:no-preference){.chev{transition:transform .15s ease}}
+
+/* Settings (collapsed by default) */
+#settings{grid-area:settings;padding:0}
+#settings summary{display:flex;justify-content:space-between;gap:var(--sp-3);align-items:center;min-height:52px;padding:var(--sp-2) var(--sp-4);cursor:pointer;list-style:none;flex-wrap:wrap}
+#settings summary::-webkit-details-marker{display:none}
+#settings summary h2{font-size:var(--fs-body);display:flex;gap:var(--sp-2);align-items:center}
+#settings[open] summary .chev{transform:rotate(90deg)}
+.set-sum{font-size:var(--fs-footnote);color:var(--label-2)}
+.set-body{display:grid;gap:var(--sp-4);padding:0 var(--sp-4) var(--sp-4)}
+.opt{display:grid;grid-template-columns:32px minmax(0,1fr);gap:0 var(--sp-1);align-items:start;cursor:pointer;min-height:var(--tap)}
+.opt input{accent-color:var(--tint);width:22px;height:22px;margin:2px 0 0}
+.opt small{grid-column:2;color:var(--label-2);font-size:var(--fs-footnote)}
+.opt input:disabled~span{color:var(--label-2)}
+
+.grid{display:grid;gap:var(--sp-5);grid-template-areas:"items" "verdict" "lookup" "settings" "notes"}
+@media (min-width:880px){
+  .grid{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);grid-template-areas:"items verdict" "lookup verdict" "settings verdict" "notes notes";align-items:start}
+  #verdict{position:sticky;top:calc(env(safe-area-inset-top,0px) + 16px)}
+}
+section{min-width:0}
+.panel{background:var(--surface);border:var(--hairline) solid var(--separator);border-radius:var(--r-card);padding:var(--sp-4)}
+@media (max-width:480px){#items.panel,#lookup.panel{padding:var(--sp-3)}}
+.sec-head{display:flex;justify-content:space-between;align-items:center;gap:var(--sp-3);margin-bottom:var(--sp-2);flex-wrap:wrap}
+.sec-head h2{font-size:var(--fs-title3)}
+.linkbtn{background:none;border:0;color:var(--tint);cursor:pointer;min-height:var(--tap);padding:0 var(--sp-1);font-size:var(--fs-subhead)}
+
+/* Verdict */
+#verdict{grid-area:verdict;border-color:var(--verdict-border)}
+#verdict .verdict-top .eyebrow{color:var(--verdict-eyebrow)}
+.verdict-top{display:grid;gap:var(--sp-1);padding-bottom:var(--sp-4);border-bottom:var(--hairline) solid var(--separator);margin-bottom:var(--sp-4)}
+.plan-name{font-size:var(--fs-title);font-weight:700;color:var(--tint);line-height:var(--lh-tight)}
+.plan-name.none{font-size:var(--fs-title3);color:var(--label-2)}
+.big-pts{margin:0;font-size:var(--fs-subhead);color:var(--label-2)}
+.big-pts b{font-family:var(--font-num);font-size:var(--fs-title2);font-weight:600;color:var(--label);margin-inline:2px}
+.verdict-note{margin:0;font-size:var(--fs-footnote);color:var(--label-2)}
+.rank{list-style:none;margin:0;padding:0;display:grid;gap:var(--sp-2)}
+.rank li{display:grid;grid-template-columns:4.6em minmax(0,1fr) auto;align-items:center;gap:var(--sp-3);font-size:var(--fs-subhead)}
+.rank .bar{height:10px;border-radius:var(--r-bar);background:var(--tint-soft);position:relative;overflow:hidden}
+.rank .bar i{position:absolute;inset:0 auto 0 0;background:var(--tint-fill);border-radius:var(--r-bar)}
+.rank .bar u{position:absolute;inset:0 auto 0 0;border-radius:var(--r-bar);background:repeating-linear-gradient(135deg,var(--warn) 0 3px,transparent 3px 6px);opacity:.6}
+.rank li.best .pname{font-weight:700;color:var(--tint)}
+.rank .pts{text-align:right;min-width:4.2em;font-family:var(--font-num);font-variant-numeric:tabular-nums}
+.rank .pts small{display:block;color:var(--warn);font-size:var(--fs-caption);font-family:var(--font-body)}
+.rank li.off{color:var(--label-2)}
+.rank li.off .bar{opacity:.5}
+.legend{display:flex;gap:var(--sp-4);margin-top:var(--sp-3);font-size:var(--fs-caption);color:var(--label-2);flex-wrap:wrap}
+.legend span{display:flex;align-items:center;gap:6px}
+.sw{width:14px;height:8px;border-radius:3px;background:var(--tint-fill)}
+.sw.maybe{background:repeating-linear-gradient(135deg,var(--warn) 0 3px,transparent 3px 6px)}
+.remind{margin:var(--sp-4) 0 0;padding:var(--sp-3);border-radius:var(--r-control);background:var(--bg);font-size:var(--fs-footnote);color:var(--label-2)}
+
+/* Items */
+#items{grid-area:items}
+.notice{margin:0 0 var(--sp-3);padding:var(--sp-1) var(--sp-3);border-radius:var(--r-control);background:var(--warn-soft);color:var(--label);font-size:var(--fs-footnote);display:flex;gap:var(--sp-2);align-items:center;justify-content:space-between;flex-wrap:wrap}
+.item-list{display:grid}
+/* Amount fits 5 digits; payment fits its longest label plus the chevron */
+.cols,.row-main{display:grid;grid-template-columns:minmax(0,1fr) 4rem 5.5rem 2.2rem;column-gap:var(--sp-2);align-items:center}
+.cols span:first-child{padding-left:16px}
+.cols{font-size:var(--fs-caption);color:var(--label-2);padding:0 0 var(--sp-2);border-bottom:var(--hairline) solid var(--separator)}
+.cols span:last-child{text-align:right}
+.item{border-bottom:var(--hairline) solid var(--separator);padding:var(--sp-1) 0}
+.nm{display:flex;align-items:center;gap:6px;min-width:0;min-height:var(--tap);background:none;border:0;padding:0;text-align:left;cursor:pointer;font-weight:500}
+.nm span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.item.open .nm .chev{transform:rotate(90deg)}
+.dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--warn)}
+.amt-in{width:100%;min-width:0;min-height:var(--tap);border:var(--hairline) solid var(--separator);border-radius:var(--r-control);background:var(--bg);padding:0 var(--sp-2);font-family:var(--font-num);font-size:max(16px,var(--fs-callout));font-variant-numeric:tabular-nums;text-align:right;-webkit-appearance:none;appearance:none}
+/* Selects drop the native iOS look (it renders narrower than the amount box) and draw their own small chevron */
+select{min-height:var(--tap);border:var(--hairline) solid var(--separator);border-radius:var(--r-control);background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 3l2.5 2.5L6.5 3' fill='none' stroke='%23666' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 4px center/7px 7px;padding:0 17px 0 4px;min-width:0;width:100%;font-size:max(16px,var(--fs-callout));-webkit-appearance:none;appearance:none;text-overflow:ellipsis}
+.pts{text-align:right;font-weight:600;font-family:var(--font-num);font-variant-numeric:tabular-nums;color:var(--pts-pos)}
+.pts.zero{color:var(--label-2);font-weight:400}
+/* 今日消費: store, amount, payment, points and same-level text share one 16px size (16px also keeps iPhone from zooming on focus) */
+#items .nm,#items .pts,#items .d-name{font-size:max(16px,var(--fs-callout))}
+/* Expanded item: name + category, then the points per plan, then actions */
+.detail{margin:0 0 var(--sp-2);padding:var(--sp-3) var(--sp-4);border-radius:var(--r-control);background:var(--bg);font-size:var(--fs-subhead);display:grid;gap:var(--sp-3)}
+.d-head{display:flex;align-items:center;flex-wrap:wrap;gap:0 var(--sp-2)}
+.d-name{font-size:var(--fs-body);font-weight:700;overflow-wrap:anywhere}
+.d-head .chip{margin-left:0}
+.d-sec{display:grid;gap:var(--sp-1)}
+.d-label{margin:0;font-size:var(--fs-caption);color:var(--label-2);letter-spacing:.04em}
+.perplan{list-style:none;margin:0;padding:0;display:grid}
+.perplan li{display:flex;justify-content:space-between;align-items:baseline;gap:var(--sp-3);padding-block:6px;border-bottom:var(--hairline) solid var(--separator);color:var(--label-2)}
+.perplan li:last-child{border-bottom:0}
+.perplan li .num{font-family:var(--font-num);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--label)}
+.perplan li.best,.perplan li.best .num{color:var(--tint);font-weight:600}
+.badge{display:inline-block;margin-left:var(--sp-2);padding:0 6px;border-radius:var(--r-pill);background:var(--tint-soft);color:var(--tint);font-size:var(--fs-caption);font-weight:500;vertical-align:1px}
+.zero-msg{margin:0;font-weight:500;color:var(--label)}
+.detail .acts{justify-content:space-between;border-top:var(--hairline) solid var(--separator);padding-top:var(--sp-1)}
+.chip{display:inline-block;font-size:var(--fs-caption);padding:0 var(--sp-2);border-radius:var(--r-pill);background:var(--surface);border:var(--hairline) solid var(--separator);color:var(--label-2);margin-left:6px;font-weight:400;vertical-align:2px}
+.chip.ex{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
+.acts{display:flex;align-items:center;gap:var(--sp-5);flex-wrap:wrap}
+/* Favourite star sits in front of the store name on every row */
+/* Favourite toggle inside the expanded details */
+.favi{display:inline-flex;align-items:center;gap:var(--sp-1);background:none;border:0;min-height:var(--tap);padding:0;color:var(--label-2);font-size:var(--fs-footnote);cursor:pointer}
+.favi path{fill:none}
+.favi.on{color:var(--tint)}
+.favi.on path{fill:currentColor}
+/* Expanding a row must push content below it down, never shift the row itself */
+#items{overflow-anchor:none}
+.rm{background:none;border:0;color:var(--label-2);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:var(--fs-footnote);min-height:var(--tap);padding:0}
+.why{color:var(--label-2)}
+.hint{color:var(--tint)}
+.warn{color:var(--warn)}
+.best-way{margin-top:var(--sp-3);padding:var(--sp-3) var(--sp-4);border-radius:var(--r-control);background:var(--bg);display:grid;gap:6px;font-size:var(--fs-subhead)}
+.best-way .lbl{display:inline-block;min-width:6.5em;font-size:var(--fs-caption);color:var(--label-2)}
+.best-way b{color:var(--tint)}
+.full-table summary{cursor:pointer;color:var(--tint);font-size:var(--fs-footnote);min-height:var(--tap);display:flex;align-items:center}
+
+.adder{margin-top:var(--sp-4);display:grid;gap:var(--sp-3)}
+/* Category chips inside an expanded item */
+.cats{display:flex;flex-wrap:wrap;gap:6px}
+.catbtn{min-height:var(--tap);padding:0 var(--sp-3);border:var(--hairline) solid var(--separator);border-radius:var(--r-pill);background:var(--surface);color:var(--label);font-size:var(--fs-footnote);cursor:pointer}
+.catbtn.on{border-color:var(--tint);color:var(--tint);font-weight:500}
+.tagbtn{display:inline-flex;align-items:center;min-height:var(--tap);background:none;border:0;padding:0;cursor:pointer}
+.tagbtn .chip{display:inline-flex;align-items:center;gap:var(--sp-1);padding:2px var(--sp-2);border-color:var(--label-3);color:var(--label)}
+.tagbtn .chev{transform:rotate(90deg)}
+.tagbtn[aria-expanded="true"] .chip{border-color:var(--tint);color:var(--tint)}
+.tagbtn[aria-expanded="true"] .chev{transform:rotate(-90deg)}
+
+.nohit{margin:0;padding:var(--sp-3);font-size:var(--fs-footnote);color:var(--label-2)}
+/* 我的店家 (inside settings) */
+.mystores{display:grid;gap:var(--sp-2);padding-top:var(--sp-4);border-top:var(--hairline) solid var(--separator)}
+.mystores h3{font-size:var(--fs-body)}
+.ms-hint,.ms-msg{margin:0;font-size:var(--fs-footnote);color:var(--label-2)}
+.ms-row,.ms-add{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,9rem) auto;gap:var(--sp-2);align-items:center}
+.ms-row{border-bottom:var(--hairline) solid var(--separator);padding-block:var(--sp-1)}
+.ms-name{display:grid;min-width:0;overflow-wrap:anywhere;font-weight:500}
+.ms-name small{font-size:var(--fs-caption);color:var(--label-2);font-weight:400}
+.ms-add input{font-size:max(16px,var(--fs-callout));min-height:var(--tap);min-width:0;border:var(--hairline) solid var(--separator);border-radius:var(--r-control);background:var(--bg);padding:0 var(--sp-3)}
+.search{position:relative}
+.search-row{display:flex;gap:var(--sp-2)}
+.search-row .search{flex:1;min-width:0}
+.addbtn{flex:none;min-height:var(--tap);padding:0 var(--sp-5);border:0;border-radius:var(--r-control);background:var(--tint-fill);color:var(--on-tint);font-size:var(--fs-callout);font-weight:500;cursor:pointer}
+.addbtn:active{filter:brightness(.88)}
+.addbtn:disabled{background:var(--separator);color:var(--label-2);cursor:default}
+/* Every text input, search box and suggestion list uses one 16px size */
+.search input{font-size:max(16px,var(--fs-callout));width:100%;min-height:var(--tap);border:var(--hairline) solid var(--separator);border-radius:var(--r-control);background:var(--bg);padding:0 var(--sp-3)}
+.sugg{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:5;background:var(--surface);border:var(--hairline) solid var(--separator);border-radius:var(--r-control);box-shadow:var(--shadow-pop);display:grid;max-height:340px;overflow:auto}
+.sugg .row{display:flex;border-bottom:var(--hairline) solid var(--separator)}
+.sugg .row:last-child{border-bottom:0}
+.sugg .pick{font-size:max(16px,var(--fs-callout));flex:1;min-width:0;min-height:var(--tap);display:flex;justify-content:space-between;align-items:center;gap:var(--sp-3);text-align:left;background:none;border:0;padding:0 var(--sp-3);cursor:pointer}
+.sugg .pick:hover,.sugg .pick:focus-visible,.sugg .fav:hover{background:var(--bg)}
+.sugg small{color:var(--label-2);flex:none;font-size:var(--fs-caption)}
+.fav{display:inline-flex;align-items:center;gap:var(--sp-1);background:none;border:0;border-left:var(--hairline) solid var(--separator);padding:0 var(--sp-3);cursor:pointer;color:var(--label-2);font-size:var(--fs-caption);flex:none}
+.fav path{fill:none}
+.fav.on{color:var(--tint)}
+.fav.on path{fill:currentColor}
+.quick-head{display:flex;justify-content:space-between;align-items:center;gap:var(--sp-2);flex-wrap:wrap;font-size:var(--fs-caption);color:var(--label-2)}
+.quick{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
+.qchip{display:inline-flex;align-items:stretch;min-height:var(--tap);border:var(--hairline) solid var(--separator);background:var(--surface);border-radius:var(--r-pill);font-size:var(--fs-subhead);overflow:hidden}
+.qchip:hover{border-color:var(--label-3)}
+.qchip button{background:none;border:0;cursor:pointer;color:inherit}
+.qchip .qadd{padding:0 var(--sp-1) 0 var(--sp-4)}
+.qchip .qadd:hover{color:var(--tint)}
+.qchip .qx{display:inline-flex;align-items:center;padding:0 var(--sp-3) 0 var(--sp-2);color:var(--label-3)}
+.qchip .qx:hover{color:var(--label)}
+.m-fav{margin-left:var(--sp-2);font-size:var(--fs-footnote)}
+.empty{color:var(--label-2);font-size:var(--fs-subhead);margin:0;padding:var(--sp-3);border:var(--hairline) dashed var(--separator);border-radius:var(--r-control)}
+
+/* Lookup */
+#lookup{grid-area:lookup}
+.matrix-wrap{overflow-x:auto;margin-top:var(--sp-2)}
+table{border-collapse:collapse;width:100%;font-size:var(--fs-footnote);min-width:460px}
+th,td{padding:var(--sp-2);border-bottom:var(--hairline) solid var(--separator);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+thead th{font-weight:500;color:var(--label-2);font-size:var(--fs-caption);white-space:normal;vertical-align:bottom}
+td.num{font-family:var(--font-num)}
+td.top{color:var(--tint);font-weight:600}
+td.z{color:var(--label-2)}
+td.m{color:var(--warn)}
+.m-title{font-weight:700;margin:0}
+.m-note{margin:var(--sp-2) 0 0;font-size:var(--fs-footnote);color:var(--label-2);max-width:65ch}
+
+/* Notes */
+#notes{grid-area:notes}
+#notes h2{font-size:var(--fs-body);margin-bottom:var(--sp-2)}
+#notes ul{margin:0;padding-left:1.2em;display:grid;gap:var(--sp-1);font-size:var(--fs-footnote);color:var(--label-2);max-width:80ch}
+#notes a{color:var(--tint)}
+.disclaim{margin:var(--sp-3) 0 0;font-size:var(--fs-caption);color:var(--label-2)}
+
+@media (prefers-reduced-motion:no-preference){.rank .bar i,.rank .bar u{transition:width .25s ease}}
+</style>
+</head>
+<body>
+<header class="banner"><div class="banner-in">
+  <p class="eyebrow">台新 Richart 卡 · 規則抓取日 2026/10/23</p>
+  <h1>權益聰明切</h1>
+</div></header>
+
+<div class="wrap">
+  <div class="dayhead">
+    <div class="dateline">
+      <label for="day" class="sr">消費日期</label>
+      <input type="date" id="day" min="2026-07-01" max="2027-12-31">
+      <span class="tag" id="dayTag"></span>
+      <button type="button" class="linkbtn" id="toToday" hidden>回到今天</button>
+    </div>
+    <p class="day" id="dayInfo" hidden></p>
+  </div>
+
+  <div class="grid">
+    <section id="verdict" class="panel" aria-live="polite"></section>
+
+    <section id="items" class="panel">
+      <div class="sec-head">
+        <h2>今日消費</h2>
+        <button type="button" class="linkbtn" id="clearAll">清空</button>
+      </div>
+      <div id="dateNotice"></div>
+      <div id="itemList" class="item-list"></div>
+      <div class="adder">
+        <div class="search-row">
+          <div class="search">
+            <input id="addSearch" type="search" enterkeyhint="done" placeholder="輸入店家，例如：全家、餐廳、手搖、momo" autocomplete="off" aria-label="輸入店家名稱">
+            <div id="addSugg" class="sugg" hidden></div>
+          </div>
+          <button type="button" class="addbtn" id="addBtn" disabled>加入</button>
+        </div>
+        <div class="quick-head"><span>常用店家：點名稱加入清單，點 × 移除；清單裡點開店家，可以「加到常用」</span><button type="button" class="linkbtn" id="quickReset">恢復預設</button></div>
+        <div class="quick" id="quick" aria-label="常用店家"></div>
+      </div>
+    </section>
+
+    <section id="lookup" class="panel">
+      <div class="sec-head"><h2>店家速查</h2><span class="eyebrow">查一家店怎麼刷最划算</span></div>
+      <div class="search">
+        <input id="lookSearch" type="search" placeholder="輸入店家名稱" autocomplete="off" aria-label="搜尋店家查看回饋率">
+        <div id="lookSugg" class="sugg" hidden></div>
+      </div>
+      <div id="matrix"></div>
+    </section>
+
+    <details id="settings" class="panel">
+      <summary><h2><svg class="chev" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M4 2.5L7.5 6 4 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>設定</h2><span class="set-sum" id="setSum"></span></summary>
+      <div class="set-body">
+        <label class="opt" for="lv2"><input type="checkbox" id="lv2"><span>已設定台新帳戶自動扣繳卡款（LEVEL 2）</span><small>沒設定時以 LEVEL 1 計算，各方案加碼最高 1.3%。設定後要到次期帳單結帳才生效。</small></label>
+        <label class="opt" for="lpcoupon"><input type="checkbox" id="lpcoupon"><span id="lpText">LINE Pay 加碼券</span><small id="lpSmall"></small></label>
+        <div class="mystores">
+          <h3>我的店家</h3>
+          <p class="ms-hint">你新增的店家，以及改過類別的推測店家，只存在這台裝置的瀏覽器。台新官網名單內的店家不能改。</p>
+          <div id="msPromoted"></div>
+          <div id="myStores"></div>
+          <div class="ms-add">
+            <input id="msName" type="text" placeholder="新增店家名稱" autocomplete="off" aria-label="新增店家名稱">
+            <select id="msCat" aria-label="新店家的類別"></select>
+            <button type="button" class="addbtn" id="msAdd" disabled>新增</button>
+          </div>
+          <p class="ms-msg" id="msMsg" hidden></p>
+        </div>
+      </div>
+    </details>
+
+    <section id="notes">
+      <h2>規則來源與計算假設</h2>
+      <ul>
+        <li>規則來源：<a href="https://www.taishinbank.com.tw/TSB/personal/credit/intro/overview/cg047/card001/" target="_blank" rel="noopener">台新Richart卡官網權益頁</a>、<a href="https://www.taishinbank.com.tw/TSB/personal/credit/intro/rights/notice/restricteditems/" target="_blank" rel="noopener">信用卡權益不回饋項目</a>，2026/10/23 抓取。權益適用期間 2026/7/1–2027/12/31；Chill刷開放切換到 2026/12/31。</li>
+        <li>勾選「已設定自動扣繳」時以 LEVEL 2 計算（設定後次期帳單結帳才生效）；不勾選時以 LEVEL 1 計算，所有方案的加碼最高 1.3%，LINE Pay 加碼券也不適用。保費 1.3% 與一般消費 0.3% 不受影響。</li>
+        <li>付款方式「信用卡」包含實體卡、線上刷卡號、Apple Pay、Google 錢包、Samsung Pay；「TWQR」是用台新Pay掃台灣Pay QR Code；「台新Pay+」是日韓海外支付；「其他」是街口、全支付、OPEN錢包、百貨自家錢包等。</li>
+        <li>點數逐筆計算、小數點後無條件捨去，所以小額消費可能是 0 點。</li>
+        <li>官網沒寫清楚的情況，依你的決定（2026/10/23）計算：用台新Pay TWQR 或台新Pay+ 付款時，同時算店家所屬方案（例如 Chill刷名單店家 10%）和 Pay著刷；街口、全支付等其他支付綁卡，以及用 LINE Pay 等方式付保費，算一般 0.3% 和付款方式適用的方案（例如 LINE Pay 在 Pay著刷 2.3%）。</li>
+        <li>每期帳單可加碼的消費額上限是「永久額度 + 30 萬」；LINE Pay 加碼券每月上限 500 點。工具沒有追蹤這兩個上限。</li>
+        <li>假日刷：週六、週日自動算假日。平日的國定假日取自台新官網列出的連續假期表（2026/9/25 至 2027/5/3）；超過這個日期只判斷週末，屆時需要更新假期表。</li>
+        <li>日期可選 2026/7/1 至 2027/12/31（權益適用期間）。Chill刷只在 2026/7/8–12/31 開放；LINE Pay 加碼券只在 2026/10–12 月，每月要重新領。</li>
+        <li>實際是否算進指定通路，以刷卡簽單上的商店名稱與行業別為準，不是看發票。</li>
+        <li>標「推測」的店家（例如鼎泰豐、星巴克）不在台新官網名單內，類別是工具依品牌常識判斷的，回饋以刷卡簽單行業別為準。</li>
+        <li>標「自訂」的店家是你設定類別的，存在這台裝置的瀏覽器，換手機或電腦不會同步；在「設定 → 我的店家」可以修改或刪除。可選的類別只有對所有店家都適用的規則（餐飲、海外消費、非回饋店家、一般店家）；刷過發現沒點數的店（例如走聯合信用卡中心小額支付的店家），可以把類別改成「非回饋店家」，之後一律算 0 點；未列名的手搖飲、咖啡與速食比照餐飲計算（官網點名不回饋的麥當勞、肯德基、水巷茶弄除外）；大筆刷、數趣刷等方案只認官網列出的店家，所以未列名的百貨或網購算一般 0.3%。</li>
+      </ul>
+      <p class="disclaim">個人試算工具，非台新銀行官方服務。實際回饋以台新銀行認定為準。</p>
+    </section>
+  </div>
+</div>
+
+<script>
+// ---------- Rule data (from Taishin official pages, fetched 2026-10-23) ----------
+const PLANS = [
+  { id: 'chill',   name: 'Chill刷' },
+  { id: 'pay',     name: 'Pay著刷' },
+  { id: 'daily',   name: '天天刷' },
+  { id: 'big',     name: '大筆刷' },
+  { id: 'food',    name: '好饗刷' },
+  { id: 'digi',    name: '數趣刷' },
+  { id: 'travel',  name: '玩旅刷' },
+  { id: 'holiday', name: '假日刷' },
+];
+const PLAN_NAME = Object.fromEntries(PLANS.map(p => [p.id, p.name]));
+
+const PAYS = [
+  ['card',      '實體卡／Apple Pay／Google 錢包'],
+  ['tspay',     '台新Pay（條碼）'],
+  ['twqr',      '台新Pay（TWQR 掃碼）'],
+  ['linepay',   'LINE Pay'],
+  ['plus',      '全盈+Pay'],
+  ['tspayplus', '台新Pay+（日韓海外）'],
+  ['other',     '其他（街口、全支付、OPEN錢包、百貨錢包等）'],
+];
+const PAY_NAME = Object.fromEntries(PAYS);
+
+// Whether a payment method counts toward a designated-channel plan (other than Pay著刷).
+// TWQR and 台新Pay+ count both for Pay著刷 and for the store's own plan (user's decision, 2026-10-23)
+const CHANNEL_PAY = { card: 'yes', tspay: 'yes', twqr: 'yes', tspayplus: 'yes', linepay: 'no', plus: 'no', other: 'no' };
+
+const GROUP = {
+  cvs: '便利商店', food: '餐飲', drink: '手搖飲／咖啡', dept: '百貨／Outlet', shop: '網購', home: '居家／服飾',
+  tech: '3C／家電', ent: '娛樂／訂閱', fit: '運動／保健', daily: '量販／生活', transit: '交通／加油',
+  drug: '藥妝藥局', travel: '旅遊／海外', hotel: '飯店', bill: '繳費／保費', other: '其他',
+};
+
+const CHILL_NOTE = 'Chill刷限獨立店或官網；在百貨、momo、外送平台購買不算，透過 Uber Eats 或蝦皮只有 3.3%。Chill刷開放切換到 2026/12/31。';
+
+const MERCHANTS = [];
+const BY_NAME = new Map();
+// Register one or more merchants ("A|B|C") sharing the same rule patch; merges plans if a name repeats.
+function put(names, group, patch = {}) {
+  for (const raw of names.split('|')) {
+    const name = raw.trim();
+    let m = BY_NAME.get(name);
+    if (!m) {
+      m = { name, group, plans: {}, maybe: {}, kw: '', note: '' };
+      BY_NAME.set(name, m);
+      MERCHANTS.push(m);
+    }
+    for (const [k, v] of Object.entries(patch)) {
+      if (k === 'plans' || k === 'maybe') Object.assign(m[k], v);
+      else if (k === 'note') m.note = m.note ? m.note + ' ' + v : v;
+      else if (k === 'kw') m.kw += ' ' + v;
+      else m[k] = v;
+    }
+  }
+}
+
+// Convenience stores and hypermarkets (non-reward items, with the 7-11/FamilyMart Taishin Pay exception)
+put('7-11|全家', 'cvs', { excluded: true, except: { pay: { tspay: 3.8 }, daily: { tspay: 3.3 } }, defaultPay: 'tspay',
+  kw: '711 seven 小七 familymart 超商', exWhy: '便利商店只有用台新Pay付款才有回饋',
+  note: '只有用台新Pay付款才有回饋，實體卡、LINE Pay、OPEN錢包、My FamiPay 都是 0。台新Pay在超商單筆上限 NT$3,000；代收代繳、禮物卡、儲值、菸品不回饋。' });
+put('萊爾富|OK超商', 'cvs', { excluded: true, kw: 'hilife 超商', exWhy: '便利商店屬不回饋項目', note: '任何方案、任何付款方式都沒有回饋。' });
+put('全聯福利中心|大全聯', 'daily', { excluded: true, kw: 'pxmart 超市', exWhy: '全聯／大全聯屬不回饋項目', note: '任何方案、任何付款方式都沒有回饋。' });
+
+// Dining
+put('一般餐廳（實體店）', 'food', { plans: { food: 3.3 }, kw: '餐廳 吃飯 小吃 restaurant 聚餐',
+  note: '好饗刷以刷卡簽單的行業別判斷（餐廳 MCC 5811–5814），不看發票店名。百貨、商場、飯店、酒吧、KTV 裡的餐廳，或透過外送平台點餐，不算好饗刷。用台新Pay（TWQR）付款切 Pay著刷可拿 3.8%。' });
+put('麥當勞', 'food', { excluded: true, except: { pay: { twqr: 3.8 } }, defaultPay: 'twqr', kw: 'mcdonald 速食',
+  exWhy: '刷卡走聯合信用卡中心小額支付，屬不回饋項目',
+  note: '實體卡不回饋。官網把麥當勞列為台新Pay（TWQR）場域，切 Pay著刷用 TWQR 付款可拿 3.8%。' });
+// Taishin's 好饗刷 terms name 麥當勞 and 肯德基 as chain fast food paid through the NCCC small-payment service (no reward)
+put('肯德基', 'food', { excluded: true, kw: 'kfc 速食 炸雞',
+  exWhy: '官網舉例：透過聯合信用卡中心小額支付收款的連鎖速食店不回饋' });
+put('王品集團（王品瘋Pay）', 'food', { plans: { food: 3.3 }, kw: '王品 西堤 陶板屋 瘋pay', note: '官網列「王品瘋Pay」為好饗刷通路。' });
+put('Uber Eats', 'food', { plans: { food: 3.3, chill: 3.3 }, kw: 'ubereats 外送', note: '須為台灣、新台幣交易。' });
+put('Foodpanda', 'food', { plans: { food: 3.3 }, kw: '熊貓 外送 panda', note: '須為台灣、新台幣交易。' });
+put('詹記麻辣火鍋|萬客什鍋|海底撈|屋馬燒肉|茶六燒肉堂|新村站著吃|燒肉政宗|碳佐麻里|雞湯大叔|gonna共樂遊|BRUN 不然|CAFE ACME|The Antipodean|貳樓|樂子 the Diner', 'food',
+  { plans: { chill: 10, food: 3.3 }, kw: '火鍋 燒肉 聚餐 早午餐 餐廳', note: CHILL_NOTE });
+put('饗饗 INPARADISE|NAGOMI', 'food', { plans: { chill: 5, food: 3.3 }, kw: '吃到飽 buffet 約會 餐廳', note: CHILL_NOTE });
+put('Fake Sober|Draft Land|臺虎精釀|ABV系列|Bar TCRC|Bar Home|Phowa|MOONROCK', 'food',
+  { plans: { chill: 10 }, kw: '酒吧 bar 精釀 喝酒', note: CHILL_NOTE + ' 酒吧不算好饗刷。' });
+
+// Drinks
+put('50嵐|得正|五桐號|龜記|UG TEA|叮哥茶飲|CAFE!N|%Arabica|COMPOSE COFFEE', 'drink',
+  { plans: { chill: 10 }, kw: '手搖 飲料 茶 咖啡 珍奶', note: CHILL_NOTE + ' 門市須提供信用卡或 LINE Pay 付款。' });
+put('茶之魔手|八曜和茶', 'drink', { plans: { chill: 10 }, kw: '手搖 飲料 茶',
+  note: '官網因品牌名稱規範從活動頁下架，但註明仍可正常獲得 Chill刷回饋。' });
+put('其他手搖飲（未列名品牌）', 'drink', { plans: { food: 3.3 }, kw: '手搖 飲料 茶 咖啡 珍奶',
+  note: '不在 Chill刷名單內，比照餐飲算好饗刷。官網寫明透過聯合信用卡中心小額支付收款的連鎖飲料店（如水巷茶弄）不回饋，這類店家實際會是 0 點。' });
+
+// Department stores, outlets, home, fashion
+put('新光三越', 'dept', { plans: { big: 3.3 }, kw: 'skm 三越 百貨',
+  note: '台北車站店不算大筆刷；百貨內簽單不是百貨名稱的店中店不算；可用 skm pay。新光三越也是台新Pay場域，切 Pay著刷用台新Pay付可拿 3.8%。' });
+put('遠東百貨|遠東SOGO|漢神巨蛋|漢神百貨|漢神洲際|台北101|遠東巨城|廣三SOGO|南紡購物中心|京站|三創生活|夢時代|統一時代|中友百貨|LaLaport', 'dept',
+  { plans: { big: 3.3 }, kw: '百貨 sogo 商場 mall', note: '以簽單商店名稱判斷；百貨內的店中店不算；用百貨自家錢包（如 101 Pay）不算。' });
+put('微風', 'dept', { plans: { big: 3.3 }, kw: 'breeze 百貨',
+  note: '限微風廣場、南京、松高、信義、南山；微風台大醫院、TRINE & ZEN、微風東岸不算；微風錢包付款不算。' });
+put('誠品生活', 'dept', { plans: { big: 3.3 }, kw: 'eslite 百貨', note: '含誠品線上；不含誠品書店。' });
+put('MITSUI OUTLET PARK|華泰名品城|SKM Park Outlets', 'dept', { plans: { big: 3.3 }, kw: 'outlet 三井' });
+put('IKEA|特力屋|HOLA|宜得利|瑪黑家居', 'home', { plans: { big: 3.3 }, kw: '家具 居家 nitori', note: '含官網，不含蝦皮等電商平台。' });
+put('UNIQLO|GU|ZARA|NET', 'home', { plans: { big: 3.3 }, kw: '服飾 衣服', note: '線上限台灣官網；百貨內店中店不算。' });
+put('lululemon', 'fit', { plans: { big: 3.3, chill: 5 }, kw: '運動 服飾', note: CHILL_NOTE });
+
+// Online shopping
+put('蝦皮|淘寶|酷澎', 'shop', { plans: { digi: 3.3, chill: 3.3 }, kw: 'shopee taobao coupang 網購 電商', note: '須為台灣、新台幣交易。' });
+put('momo|PChome|Amazon|東森|博客來|Richart Mart|PayEasy|iHerb|SHEIN|Farfetch|Olive Young', 'shop', { plans: { digi: 3.3 }, kw: '網購 電商',
+  note: '不含黃金、遊戲點數、票券、點數類商品。PChome 購物車內有儲值或電子票券時整筆不算，請分開結帳。' });
+put('Pinkoi', 'shop', { plans: { chill: 5 }, kw: '網購 設計', note: CHILL_NOTE });
+put('Apple 直營（含官網）|Studio A|DJI|Insta360|GoPro', 'tech', { plans: { chill: 3.3 }, kw: 'apple 3c 相機',
+  note: 'Apple 媒體服務（App Store、iCloud 等）屬不回饋項目，和 Apple 直營店不同。' });
+put('神腦|燦坤|全國電子|美廉社', 'tech', { kw: '3c 家電 超市', note: '官網列為台新Pay（TWQR）場域；切 Pay著刷並用台新Pay付款可拿 3.8%。' });
+
+// Entertainment, subscriptions
+put('Netflix|Disney+', 'ent', { plans: { chill: 5, digi: 3.3 }, kw: '串流 影音 訂閱' });
+put('巴哈姆特|BOOK WALKER|Animate|樂天KOBO|Readmoo讀墨|愛爾達', 'ent', { plans: { chill: 5 }, kw: '動漫 電子書 訂閱' });
+put('WEVERSE|K-MONSTAR|微樂客|五大唱片|仙女樹|FANME|NOL', 'ent', { plans: { chill: 5 }, kw: '追星 kpop 應援' });
+put('MyCard|遊戲橘子|Steam|PlayStation|Nintendo', 'ent', { plans: { digi: 3.3 }, kw: '遊戲 game' });
+put('ChatGPT|Notion|Canva|Perplexity|Claude', 'ent', { plans: { digi: 3.3 }, kw: 'ai 訂閱', note: '若透過 Google 付款（明細含 Google），每季結算後才回饋。' });
+put('知識衛星|Amazing Talker|Tutor ABC|Hahow|PressPlay', 'ent', { plans: { digi: 3.3 }, kw: '課程 線上學習' });
+put('拓元售票|KKTIX|年代售票|寬宏售票|OPENTIX|FunNow', 'ent', { plans: { food: 3.3 }, kw: '售票 演唱會 票', note: '須為台灣、新台幣交易。' });
+put('錢櫃|好樂迪|ONCOR|sing!go|享溫馨', 'ent', { plans: { food: 3.3 }, kw: 'ktv 唱歌' });
+put('YouTube Premium|Spotify|Apple 媒體服務（App Store、iCloud）|Google Play', 'ent', { excluded: true, kw: '訂閱 串流', exWhy: '媒體服務屬不回饋項目' });
+
+// Fitness, health
+put('Anytime Fitness|健身工廠|World Gym|超核心 Hypercore|KX PILATES|虎鐵健身|17FIT', 'fit', { plans: { chill: 5 }, kw: '健身 gym 皮拉提斯', note: CHILL_NOTE });
+put('Adidas|New Balance|PUMA|Onitsuka Tiger|Nike|HOKA|Salomon', 'fit', { plans: { chill: 5 }, kw: '運動 鞋 服飾', note: CHILL_NOTE });
+put('好好生醫|POPCARE好在乎|營養師輕食|VITABOX|MYPROTEIN|UrMart優馬選品', 'fit', { plans: { chill: 5 }, kw: '保健 營養', note: CHILL_NOTE });
+
+// Daily goods, transport, fuel, pharmacies (天天刷)
+put('萬家福|樂家康|大買家|唐吉訶德|LOPIA', 'daily', { plans: { daily: 3.3 }, kw: '量販 超市 家樂福 carrefour donki',
+  note: '以簽單店名判斷；美食街、商店街不算。唐吉訶德、LOPIA 不含附屬餐廳、菸品、代收、藥品、奶粉。' });
+put('智生活', 'daily', { plans: { daily: 3.3 }, kw: '到府 洗衣', note: '限智生活 App、智樂家官網訂購到府服務；管理費、生活繳費不回饋。' });
+put('臺鐵|高鐵', 'transit', { plans: { daily: 3.3 }, kw: '台鐵 火車 thsr',
+  note: '限官網、官方 App、車站窗口與售票機購票；悠遊卡、TR-PASS 不算。以購票當天的方案計算，不是乘車日。' });
+put('台灣大車隊|Yoxi|台灣Bolt|Uber（台灣）', 'transit', { plans: { daily: 3.3 }, kw: '計程車 taxi uber', note: 'Uber、Bolt 須為台灣、新台幣交易。' });
+put('LINEGO', 'transit', { plans: { daily: 3.3 }, lpDaily: true, kw: '計程車 taxi line go', note: '天天刷也接受 LINE Pay 綁定付款。' });
+put('中油直營|全國加油|全國特急電|源點EVOASIS|華城電能EVALUE|USPACE|Autopass（車麻吉）', 'transit', { plans: { daily: 3.3 }, kw: '加油 充電 停車',
+  note: '中油Pay 付款不算；USPACE 僅限停車費。' });
+put('寶雅|康是美|屈臣氏|杏一醫療|大樹藥局|丁丁藥局|佑全保健藥妝|健康人生藥局', 'drug', { plans: { daily: 3.3 }, kw: '藥妝 藥局 watsons poya',
+  note: '藥品、1 歲以下嬰幼兒奶粉、醫療器材不算；超商或量販複合門市、機場店不算。康是美、大樹藥局也是台新Pay場域。' });
+put('台北捷運（感應支付）', 'transit', { noHoliday: true, kw: 'mrt 捷運', note: '感應支付只有一般 0.3%，假日刷也不加碼。' });
+
+// Travel
+put('海外消費（外幣或海外商家）', 'travel', { plans: { travel: 3.3 }, overseas: true, kw: '日本 韓國 出國 外幣',
+  note: '以交易幣別或商家國別判斷。用新台幣結帳且商家國別是台灣，算國內消費。' });
+put('Uber（海外）|Grab|SUICA|ICOCA|PASMO|WOWPASS|AIRSIM', 'travel', { plans: { travel: 3.3 }, overseas: true, kw: '日本 韓國 交通 西瓜卡 esim' });
+put('指定航空公司（官網或櫃台購票）', 'travel', { plans: { travel: 3.3 }, kw: '機票 華航 長榮 星宇 虎航 國泰 航空',
+  note: '華航、長榮、星宇、虎航、國泰、華信、立榮、樂桃、阿聯酋、亞航、酷航、捷星、新航、日航、越捷；透過第三方平台訂票不算。' });
+put('Klook|KKday|Agoda|Booking.com|Trip.com|Airbnb|Hotels.com|Expedia', 'travel', { plans: { travel: 3.3 }, kw: '訂房 旅遊 行程',
+  note: '選「到店付款」不算。以帳單上的消費日當天方案計算。' });
+put('指定旅行社（雄獅、易遊網、東南、可樂等）', 'travel', { plans: { travel: 3.3 }, kw: '旅行社 跟團', note: '限直營通路與官網，加盟店不算。' });
+put('指定飯店（晶華、萬豪、福華、老爺、煙波、漢來等）', 'hotel', { plans: { food: 3.3 }, kw: '飯店 住宿 hotel',
+  note: '不含餐券、住宿券、代訂。完整飯店名單見官網注意事項。' });
+
+// Bills and insurance
+put('保費（保險公司自動扣繳）', 'bill', { base: 1.3, baseWhy: '保費 1.3%，不用切換', basePays: ['card', 'tspay'], noHoliday: true, kw: '保險',
+  note: '不限方案都是 1.3%。不含躉繳、投資型、彈性繳、分期 0 利率。' });
+put('保費（手動刷卡或線上投保）', 'bill', { base: 1.3, baseWhy: '保費 1.3%，不用切換', basePays: ['card', 'tspay'], kw: '保險',
+  note: '國定假日切假日刷可拿 2%。' });
+put('路邊停車費', 'bill', { excluded: true, kw: '停車', exWhy: '路邊停車費屬不回饋項目' });
+put('水電瓦斯、電信代扣、繳稅、規費', 'bill', { excluded: true, kw: '帳單 稅 電費', exWhy: '代扣繳費與稅費屬不回饋項目' });
+put('悠遊卡、一卡通自動加值', 'bill', { excluded: true, kw: '加值 easycard', exWhy: '儲值卡加值屬不回饋項目' });
+
+put('其他一般店家', 'other', { kw: '一般 其他',
+  note: '不在任何指定通路名單內：一般 0.3%。切 Pay著刷並用台新Pay付款可拿 3.8%，用 LINE Pay 或全盈+Pay 2.3%。' });
+
+// ---------- Categories a user can assign to a store that is not on Taishin's lists ----------
+// Only rules that apply to ANY store of that kind are offered: plan lists such as 大筆刷 or 數趣刷 name specific
+// stores, so an unlisted department store or online shop only gets the general 0.3%.
+const CATS = [
+  { id: 'food', label: '餐飲（含手搖飲、咖啡、速食）', short: '餐飲', tpl: '一般餐廳（實體店）', group: 'food' },
+  { id: 'overseas', label: '海外消費', short: '海外消費', tpl: '海外消費（外幣或海外商家）', group: 'travel' },
+  // Any plan earns 0: stores Taishin lists as non-reward, or stores the user checked earned nothing
+  { id: 'none', label: '非回饋店家（含萊爾富、OK，及確認過沒點數的店）', short: '非回饋店家', tpl: '萊爾富', group: 'other' },
+  { id: 'general', label: '一般店家（含未列名百貨、網購）', short: '一般店家', tpl: '其他一般店家', group: 'other' },
+];
+const CAT_BY_ID = Object.fromEntries(CATS.map(c => [c.id, c]));
+const CAT_BY_TPL = { ...Object.fromEntries(CATS.map(c => [c.tpl, c.id])), '其他手搖飲（未列名品牌）': 'food' };
+// Categories saved by older versions of the page
+const OLD_CAT = { restaurant: 'food', drink: 'food', fastfood: 'food', cvs: 'none' };
+// Tool-made generic entries (not Taishin's own wording), shown without an "官網" label
+const GENERIC = new Set(['一般餐廳（實體店）', '其他手搖飲（未列名品牌）', '海外消費（外幣或海外商家）', '其他一般店家']);
+
+// ---------- Built-in brand list (category guessed from general knowledge, NOT from Taishin's terms) ----------
+// Each brand reuses the rules of a generic entry; the guess is shown to the user wherever the brand appears.
+const GUESS_NOTE = '這家店不在台新官網名單內，類別是工具依品牌推測，實際以刷卡簽單上的行業別為準（例如開在百貨裡的分店，簽單可能是百貨）。';
+function alias(list, templateName, group) {
+  const tpl = BY_NAME.get(templateName);
+  for (const [name, kw = ''] of list) {
+    if (BY_NAME.has(name)) continue;
+    const m = { ...tpl, name, group: group || tpl.group, kw: kw + ' ' + tpl.kw, guess: true, catId: CAT_BY_TPL[templateName], defaultPay: tpl.defaultPay,
+      note: GUESS_NOTE + (tpl.note ? ' ' + tpl.note : '') };
+    BY_NAME.set(name, m);
+    MERCHANTS.push(m);
+  }
+}
+alias([
+  ['鼎泰豐', 'din tai fung 小籠包'], ['欣葉'], ['瓦城', '泰式'], ['非常泰', '泰式'], ['大心', '泰式麵'], ['1010湘', '湘菜'], ['開飯川食堂', '川菜'],
+  ['王品牛排'], ['西堤', 'tasty 牛排'], ['陶板屋'], ['原燒', '燒肉'], ['聚北海道鍋物', '火鍋'], ['夏慕尼', '鐵板燒'], ['藝奇', '日式'], ['石二鍋', '火鍋'], ['青花驕', '火鍋'],
+  ['饗食天堂', '吃到飽 buffet'], ['果然匯', '吃到飽'], ['旭集', '吃到飽'], ['築間', '火鍋'], ['輕井澤', '火鍋'], ['老四川', '火鍋'], ['馬辣', '火鍋'], ['肉多多', '火鍋'],
+  ['鬍鬚張', '滷肉飯'], ['八方雲集', '鍋貼 水餃'], ['四海遊龍', '鍋貼'], ['爭鮮', '壽司'], ['藏壽司', 'kura 壽司'], ['壽司郎', 'sushiro 壽司'], ['定食8', '日式'],
+  ['添好運', '港式 點心'], ['點點心', '港式'], ['春水堂', '珍奶 茶館'], ['樂雅樂', 'royal host'], ['貴族世家', '牛排'], ['我家牛排', '牛排'], ['孫東寶', '牛排'],
+  ['金色三麥', '啤酒 餐廳'], ['胡同燒肉', '燒肉'], ['乾杯燒肉', '燒肉'], ['一蘭拉麵', 'ichiran 拉麵'], ['一風堂', 'ippudo 拉麵'], ['屯京拉麵', '拉麵'], ['麵屋武藏', '拉麵'],
+  ['大戶屋', 'ootoya 日式'], ['吉野家', 'yoshinoya 牛丼'], ['すき家', 'sukiya 牛丼 食其家'], ['丸龜製麵', 'marugame 烏龍麵'], ['三媽臭臭鍋', '火鍋'], ['涓豆腐', '韓式'],
+], '一般餐廳（實體店）', 'food');
+alias([
+  ['摩斯漢堡', 'mos burger'], ['漢堡王', 'burger king'], ['頂呱呱', '炸雞'], ['拿坡里', '披薩 炸雞'], ['21世紀風味館', '炸雞'], ['Subway', '潛艇堡'],
+  ['達美樂', "domino's 披薩"], ['必勝客', 'pizza hut 披薩'], ['胖老爹', '炸雞'],
+], '一般餐廳（實體店）', 'food');
+alias([
+  ['清心福全'], ['迷客夏', 'milksha'], ['可不可熟成紅茶', 'kebuke'], ['CoCo都可', 'coco'], ['大苑子'], ['鶴茶樓'], ['麻古茶坊', 'macu'], ['一沐日'], ['珍煮丹'],
+  ['春陽茶事'], ['老賴茶棧'], ['再睡5分鐘'], ['先喝道'], ['康青龍'], ['天仁茗茶'], ['日出茶太', 'chatime'], ['TEA TOP第一味', 'teatop'], ['茶湯會'], ['吃茶三千'], ['萬波'],
+  ['星巴克', 'starbucks 咖啡'], ['路易莎', 'louisa 咖啡'], ['cama café', 'cama 咖啡'], ['伯朗咖啡', 'mr brown 咖啡'], ['丹堤咖啡', 'dante 咖啡'], ['黑沃咖啡', 'black whale 咖啡'], ['怡客咖啡', 'ikari 咖啡'],
+], '其他手搖飲（未列名品牌）', 'drink');
+alias([
+  ['無印良品', 'muji'], ['大創', 'daiso 百元'], ['小北百貨'], ['迪卡儂', 'decathlon 運動'], ['誠品書店', 'eslite 書店'], ['金石堂', '書店'],
+  ['85度C', '麵包 蛋糕 咖啡'], ['寶島眼鏡', '眼鏡'], ['光南大批發'], ['威秀影城', '電影 vieshow'], ['秀泰影城', '電影 showtime'],
+  ['樂天市場', 'rakuten 網購'], ['Yahoo購物中心', 'yahoo 網購'], ['露天拍賣', 'ruten 網購'], ['friDay購物', 'friday 網購'],
+], '其他一般店家');
+// Taishin's terms name 水巷茶弄 as a chain drink shop paid through the NCCC small-payment service (no reward)
+put('水巷茶弄', 'drink', { excluded: true, kw: '手搖 飲料', exWhy: '官網舉例：透過聯合信用卡中心小額支付收款的連鎖飲料店不回饋' });
+
+const QUICK = ['7-11', '全家', '萊爾富', '一般餐廳（實體店）', '50嵐', '其他手搖飲（未列名品牌）', '新光三越', 'momo', '蝦皮', 'Uber Eats'];
+
+// Weekday national holidays: long-weekend periods listed on Taishin's official page (weekends are always holidays)
+const HOLIDAY_RANGES = [
+  ['2026-09-25', '2026-09-28'], ['2026-10-09', '2026-10-11'], ['2026-10-24', '2026-10-26'], ['2026-12-25', '2026-12-27'], ['2027-01-01', '2027-01-03'],
+  ['2027-02-06', '2027-02-12'], ['2027-02-27', '2027-03-01'], ['2027-04-03', '2027-04-06'], ['2027-05-01', '2027-05-03'],
+];
+const HOLIDAY_KNOWN_UNTIL = '2027-05-03';
+const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
+function dayInfo(ds) {
+  const wd = new Date(ds + 'T00:00:00').getDay();
+  const weekend = wd === 0 || wd === 6;
+  const national = HOLIDAY_RANGES.some(([a, b]) => ds >= a && ds <= b);
+  return { holiday: weekend || national, weekend, national, wd, stale: ds > HOLIDAY_KNOWN_UNTIL };
+}
+
+// ---------- Reward calculation ----------
+const permille = r => Math.round(r * 10);                                // 3.8% -> 38
+const points = (amt, rate) => Math.floor((amt * permille(rate)) / 1000); // per-transaction floor
+
+// Evaluate one purchase under one plan.
+// Returns { sure, opt }: sure = best rate stated clearly in the terms; opt = best rate if unclear cases also apply.
+function evaluate(m, pay, plan, ctx) {
+  const c = [];
+  // LEVEL 1 (no auto-debit): every switch-plan bonus is capped at 1.3%
+  const lv = r => (ctx.lv2 ? r : Math.min(r, 1.3));
+  if (m.excluded) {
+    const ex = m.except && m.except[plan] && m.except[plan][pay];
+    if (ex) c.push({ rate: lv(ex), sure: true, why: `${PLAN_NAME[plan]}：用台新Pay付款例外可回饋` });
+    else c.push({ rate: 0, sure: true, why: m.exWhy || '屬不回饋項目' });
+    return pick(c);
+  }
+  // Base reward
+  if (m.base && !m.basePays.includes(pay)) c.push({ rate: 0.3, sure: true, why: '一般消費 0.3%（此付款方式不適用保費 1.3%）' });
+  else if (m.base) c.push({ rate: m.base, sure: true, why: m.baseWhy });
+  else c.push({ rate: 0.3, sure: true, why: '一般消費 0.3%' });
+
+  // Designated channel of the selected plan
+  const sureRate = m.plans[plan], maybeRate = m.maybe[plan];
+  if (sureRate != null || maybeRate != null) {
+    let ok = CHANNEL_PAY[pay];
+    if (pay === 'linepay' && (plan === 'chill' || (plan === 'daily' && m.lpDaily))) ok = 'yes';
+    if (ok !== 'no') {
+      const clear = ok === 'yes' && sureRate != null;
+      const why = clear ? `${PLAN_NAME[plan]}指定通路`
+        : sureRate == null ? `${PLAN_NAME[plan]}：官網沒有明列此店家`
+        : `${PLAN_NAME[plan]}：官網沒寫明${PAY_NAME[pay]}是否認列`;
+      c.push({ rate: lv(sureRate ?? maybeRate), sure: clear, why });
+    }
+  }
+  // Pay著刷 applies to any merchant by payment method
+  if (plan === 'pay') {
+    if (['tspay', 'twqr', 'tspayplus'].includes(pay)) c.push({ rate: lv(3.8), sure: true, why: 'Pay著刷：台新Pay 付款' });
+    if (['linepay', 'plus'].includes(pay) && !m.overseas) c.push({ rate: lv(2.3), sure: true, why: `Pay著刷：${PAY_NAME[pay]} 付款` });
+  }
+  // 假日刷 applies to any merchant on weekends and national holidays
+  if (plan === 'holiday' && ctx.holiday && pay !== 'other' && !m.noHoliday) {
+    c.push({ rate: lv(2), sure: true, why: '假日刷：假日不限通路' });
+  }
+  return pick(c);
+}
+function pick(c) {
+  const best = list => list.reduce((a, b) => (b.rate > a.rate ? b : a), { rate: 0, sure: true, why: '沒有回饋' });
+  return { sure: best(c.filter(x => x.sure)), opt: best(c) };
+}
+// LINE Pay coupon bonus (10–12/2026): +1.5% for LINE Pay in Taiwan/NTD, any plan, separate floor; requires auto-debit
+const couponApplies = (m, pay, ctx) => ctx.lp && ctx.lv2 && pay === 'linepay' && !m.excluded && !m.overseas;
+function couponBonus(m, pay, amt, ctx) {
+  if (!couponApplies(m, pay, ctx)) return 0;
+  return points(amt, 1.5);
+}
+
+// Benefit period, plan windows and coupon months
+const PERIOD = { start: '2026-07-01', end: '2027-12-31' };
+const planOpen = (plan, ds) => plan !== 'chill' || (ds >= '2026-07-08' && ds <= '2026-12-31');
+const couponMonth = ds => ds >= '2026-10-01' && ds <= '2026-12-31';
+
+const CUSTOM_NOTE = '這家店的類別是你設定的，實際回饋以刷卡簽單上的行業別為準。';
+function getM(name) {
+  const base = BY_NAME.get(name);
+  if (base && !base.guess) return base;                 // Taishin's list or a generic entry: fixed rules
+  const c = state.custom[name];
+  if (c) {
+    const cat = CAT_BY_ID[c.cat] || CAT_BY_ID.general, tpl = BY_NAME.get(cat.tpl);
+    return { ...tpl, name, group: cat.group, kw: (base ? base.kw : '') + ' ' + tpl.kw, guess: false, custom: true,
+      created: !base, catId: cat.id, needsCat: !!c.needsCat, defaultPay: tpl.defaultPay,
+      note: CUSTOM_NOTE + (tpl.note ? ' ' + tpl.note : '') };
+  }
+  if (base) return base;                                 // built-in guess
+  const g = BY_NAME.get('其他一般店家');                   // e.g. a custom store the user deleted
+  return { ...g, name, custom: true, created: true, catId: 'general', note: CUSTOM_NOTE };
+}
+const sourceLabel = m => (m.custom ? '自訂' : m.guess ? '推測' : GENERIC.has(m.name) ? '' : '官網');
+// Guessed and custom stores are labelled with the reward category the tool calculates from (e.g. 餐廳)
+const kindLabel = m => ((m.guess || m.custom) ? (m.needsCat ? '未分類' : (CAT_BY_ID[m.catId] || CAT_BY_ID.general).short)
+  : GENERIC.has(m.name) ? CAT_BY_ID[CAT_BY_TPL[m.name]].short : GROUP[m.group]);
+const tagLabel = m => kindLabel(m) + (sourceLabel(m) ? '・' + sourceLabel(m) : '');
+// Every store the search can find: built-in entries plus stores the user created
+function allMerchants() {
+  const made = Object.keys(state.custom).filter(n => !BY_NAME.has(n)).map(getM);
+  return [...MERCHANTS.map(m => getM(m.name)), ...made];
+}
+function findByName(name) {
+  if (BY_NAME.has(name) || state.custom[name]) return getM(name);
+  const low = name.toLowerCase();
+  return allMerchants().find(m => m.name.toLowerCase() === low) || null;
+}
+
+function itemPoints(it, plan, ctx) {
+  const m = getM(it.name);
+  // A plan that cannot be selected on this date earns only the base reward
+  const r = evaluate(m, it.pay, planOpen(plan, ctx.date) ? plan : 'none', ctx);
+  const bonus = couponBonus(m, it.pay, it.amt, ctx);
+  return { m, r, sure: points(it.amt, r.sure.rate) + bonus, opt: points(it.amt, r.opt.rate) + bonus, bonus };
+}
+
+// ---------- State ----------
+const KEY = 'richart-switcher-v1';
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+let state = load() || {
+  date: today(), lv2: true, lpMonths: {}, quick: [...QUICK], custom: {}, promoted: [], example: true,
+  items: [
+    { id: 1, name: '7-11', amt: 85, pay: 'tspay' },
+    { id: 2, name: '一般餐廳（實體店）', amt: 260, pay: 'twqr' },
+    { id: 3, name: '50嵐', amt: 65, pay: 'card' },
+  ],
+};
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if (s && Array.isArray(s.items)) {
+      s.custom = s.custom && typeof s.custom === 'object' ? s.custom : {};
+      for (const v of Object.values(s.custom)) if (OLD_CAT[v.cat]) v.cat = OLD_CAT[v.cat];
+      s.promoted = Array.isArray(s.promoted) ? s.promoted : [];
+      // A store the user categorised that Taishin has since listed: official rules take over
+      for (const n of Object.keys(s.custom)) {
+        const b = BY_NAME.get(n);
+        if (b && !b.guess) { delete s.custom[n]; if (!s.promoted.includes(n)) s.promoted.push(n); }
+      }
+      const known = n => BY_NAME.has(n) || !!s.custom[n];
+      s.items = s.items.filter(i => known(i.name));
+      if (s.lv2 === undefined) s.lv2 = true;
+      if (!s.lpMonths) s.lpMonths = s.lp ? { [today().slice(0, 7)]: true } : {};
+      s.quick = Array.isArray(s.quick) ? s.quick.filter(known) : [...QUICK];
+      delete s.holiday; delete s.lp;
+      return s;
+    }
+  } catch (e) {}
+  return null;
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+// ---------- Rendering ----------
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const fmtRate = r => (r === 0 ? '0' : r + '%');
+
+const clampDate = ds => (ds < PERIOD.start ? PERIOD.start : ds > PERIOD.end ? PERIOD.end : ds);
+let viewDate = clampDate(today());
+
+function ctx() {
+  return {
+    date: viewDate,
+    holiday: dayInfo(viewDate).holiday,
+    lv2: state.lv2,
+    lp: couponMonth(viewDate) && !!state.lpMonths[viewDate.slice(0, 7)],
+  };
+}
+
+function renderDay() {
+  const ds = viewDate, d = dayInfo(ds);
+  const tag = $('dayTag');
+  tag.textContent = d.national ? '國定假日・假日刷適用' : d.weekend ? '週末・假日刷適用' : '平日';
+  tag.classList.toggle('on', d.holiday);
+  const notes = [];
+  if (!planOpen('chill', ds)) notes.push('Chill刷這天不開放切換');
+  if (d.stale) notes.push('國定假日資料只到 2027/5/3，目前只判斷週末');
+  $('dayInfo').textContent = notes.length ? notes.join('。') + '。' : '';
+  $('dayInfo').hidden = !notes.length;
+}
+
+function renderToggles() {
+  $('day').value = viewDate;
+  $('toToday').hidden = viewDate === clampDate(today());
+  $('lv2').checked = state.lv2;
+  const month = +viewDate.slice(5, 7), cm = couponMonth(viewDate);
+  const got = cm && !!state.lpMonths[viewDate.slice(0, 7)];
+  $('lpcoupon').disabled = !cm;
+  $('lpcoupon').checked = got;
+  $('lpText').textContent = cm ? `已領 ${month} 月 LINE Pay 加碼券` : 'LINE Pay 加碼券';
+  $('lpSmall').textContent = cm
+    ? 'LINE Pay 付款再加 1.5%，每月上限 500 點。每個月要在 Richart Life App 重新領。'
+    : '這個月份沒有加碼券活動（只有 2026 年 10–12 月）。';
+  $('setSum').textContent = (state.lv2 ? 'LEVEL 2' : 'LEVEL 1，加碼最高 1.3%') +
+    (cm ? `・${month} 月 LINE Pay 券${got ? '已領' : '未領'}` : '');
+}
+
+// ---------- Favourite (quick-add) merchants ----------
+const STAR = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.6l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.4l-3.8 2 .7-4.3-3.1-3 4.3-.6z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+const CROSS = '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const isFav = name => state.quick.includes(name);
+function toggleFav(name) {
+  state.quick = isFav(name) ? state.quick.filter(n => n !== name) : [...state.quick, name];
+  renderQuick();
+  if (lookupMerchant) renderMatrix(lookupMerchant);
+  save();
+}
+function favBtn(name) {
+  const on = isFav(name);
+  return `<button type="button" class="fav${on ? ' on' : ''}" data-fav="${esc(name)}" aria-pressed="${on}" title="${on ? '從常用移除' : '加到常用'}">${STAR}<span>常用</span></button>`;
+}
+function renderQuick() {
+  const short = n => n.replace(/（.*）/, '');
+  $('quick').innerHTML = state.quick.length
+    ? state.quick.map(n => `<span class="qchip"><button type="button" class="qadd" data-name="${esc(n)}">${esc(short(n))}</button><button type="button" class="qx" data-rm="${esc(n)}" aria-label="從常用移除 ${esc(n)}" title="從常用移除">${CROSS}</button></span>`).join('')
+    : '<span class="why">還沒有常用店家。</span>';
+}
+
+function totals() {
+  const c = ctx();
+  return PLANS.map(p => {
+    let sure = 0, opt = 0;
+    for (const it of state.items) { const x = itemPoints(it, p.id, c); sure += x.sure; opt += x.opt; }
+    return { plan: p, sure, opt };
+  });
+}
+
+function renderVerdict(rows) {
+  const el = $('verdict');
+  const valid = state.items.filter(i => i.amt > 0);
+  const sorted = [...rows].sort((a, b) => b.sure - a.sure || b.opt - a.opt);
+  const best = sorted[0];
+  const max = Math.max(1, ...rows.map(r => r.opt));
+  let top;
+  if (!valid.length) {
+    top = `<p class="eyebrow">今天建議切換</p><div class="plan-name none">先加入今天的消費</div>
+`;
+  } else if (best.sure === 0) {
+    top = `<p class="eyebrow">今天建議切換</p><div class="plan-name none">哪個方案都是 0 點</div>`;
+  } else {
+    const ties = sorted.filter(r => r.sure === best.sure && r.opt === best.opt).map(r => r.plan.name);
+    top = `<p class="eyebrow">今天建議切換</p>
+      <div class="plan-name">${esc(ties.join('／'))}</div>
+      <p class="big-pts">台新Point <b>${best.sure}</b> 點</p>`;
+  }
+  const rank = rows.map(r => {
+    const closed = !planOpen(r.plan.id, viewDate);
+    const off = closed || (r.plan.id === 'holiday' && !ctx().holiday);
+    const isBest = valid.length && best.sure > 0 && r.sure === best.sure && r.opt === best.opt;
+    return `<li class="${isBest ? 'best' : ''} ${off ? 'off' : ''}">
+      <span class="pname">${esc(r.plan.name)}</span>
+      <span class="bar" aria-hidden="true"><i style="width:${(r.sure / max) * 100}%"></i></span>
+      <span class="pts num">${r.sure} 點${closed ? '<small>這天不開放</small>' : off ? '<small>非假日</small>' : ''}</span>
+    </li>`;
+  }).join('');
+  el.innerHTML = `<div class="verdict-top">${top}</div>
+    <ol class="rank">${rank}</ol>
+    <p class="remind">23:59 前到 Richart Life App 切換（正卡人操作，每天限一次）。當天 0 點起的消費都用切換後的方案計算。${state.lv2 ? '' : '<br>目前以 LEVEL 1 計算（未設定自動扣繳）。'}</p>`;
+  return best.sure > 0 ? best.plan.id : null;
+}
+
+const PAY_SHORT = {
+  card: '信用卡', tspay: '台新Pay', twqr: 'TWQR', linepay: 'LINE Pay',
+  plus: '全盈+Pay', tspayplus: '台新Pay+', other: '其他',
+};
+const CHEV = '<svg class="chev" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M4 2.5L7.5 6 4 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const shortName = n => n.replace(/（.*）/, '');
+// Why a purchase earns nothing under any plan — always one of these five short reasons
+function zeroReason(it, m, c) {
+  if (!(it.amt > 0)) return '尚未輸入金額';
+  if (it.pay === 'other') return '付款方式不適用';
+  const rateWith = pay => Math.max(...PLANS.map(p => itemPoints({ ...it, pay }, p.id, c).r.sure.rate));
+  const otherPayWorks = PAYS.some(([k]) => k !== it.pay && k !== 'other' && rateWith(k) > 0);
+  if (m.excluded) return otherPayWorks ? '付款方式不適用' : '非回饋店家';
+  if (rateWith(it.pay) > 0) return '金額過低';
+  return otherPayWorks ? '付款方式不適用' : '非回饋店家';
+}
+const openItems = new Set();
+const catOpenItems = new Set();   // rows whose category choices are open
+
+function renderItems(bestPlan, list = $('itemList')) {
+  const c = ctx();
+  let notice = '';
+  if (state.example) notice = `<div class="notice"><span>以下是範例，改成你今天刷的消費，或清空重來。</span><button type="button" class="linkbtn" data-act="clear">清空範例</button></div>`;
+  else if (state.date !== viewDate && state.items.length) notice = `<div class="notice"><span>這份清單是 ${esc(state.date)} 的。</span><button type="button" class="linkbtn" data-act="clear">清空，記這天的</button></div>`;
+  $('dateNotice').innerHTML = notice;
+
+  if (!state.items.length) { list.innerHTML = '<p class="empty">還沒有記錄。在下方輸入店家後按「加入」，或點常用店家。</p>'; return; }
+  const plan = bestPlan || 'pay';
+  const rows = state.items.map(it => {
+    const x = itemPoints(it, plan, c), m = x.m;
+    const src = sourceLabel(m), editable = m.guess || m.custom;
+    const tagText = tagLabel(m);
+    const catOpen = editable && (catOpenItems.has(it.id) || m.needsCat);
+    // Editable stores: the tag itself opens the category choices; picking one closes them again
+    const tag = editable
+      ? `<button type="button" class="tagbtn" data-act="cattoggle" aria-expanded="${catOpen}" aria-label="${esc(m.name)} 的類別：${esc(tagText)}，點一下修改"><span class="chip${m.excluded ? ' ex' : ''}">${esc(tagText)}${CHEV}</span></button>`
+      : `<span class="chip${m.excluded ? ' ex' : ''}">${esc(tagText)}</span>`;
+    const lines = [`<div class="d-head"><span class="d-name">${esc(m.name)}</span>${tag}</div>`];
+    if (catOpen) {
+      lines.push(`<div class="cats" role="group" aria-label="${esc(m.name)} 的類別">${CATS.map(c =>
+        `<button type="button" class="catbtn${!m.needsCat && c.id === m.catId ? ' on' : ''}" data-act="cat" data-cat="${c.id}" aria-pressed="${!m.needsCat && c.id === m.catId}">${esc(c.label)}</button>`).join('')}</div>`);
+    }
+    // Points under each plan: plans that earn nothing are left out, plans with the same points share one line
+    const per = PLANS.map(p => ({ p, v: itemPoints(it, p.id, c).sure })).filter(y => y.v > 0).sort((u, v) => v.v - u.v);
+    const groups = [];
+    for (const y of per) { const g = groups.find(g => g.v === y.v); if (g) g.ps.push(y.p); else groups.push({ v: y.v, ps: [y.p] }); }
+    const groupLabel = (g, i) => {
+      const n = g.ps.length, names = g.ps.map(p => p.name);
+      if (n === 1) return names[0];
+      if (n === 2) return names.join('、');
+      if (groups.length === 1) return `每個方案（${n} 個）`;
+      return i === groups.length - 1 ? `其他 ${n} 個方案` : `${names[0]}、${names[1]} 等 ${n} 個方案`;
+    };
+    lines.push(`<div class="d-sec"><p class="d-label">各方案點數</p>${groups.length
+      ? `<ul class="perplan">${groups.map((g, i) => {
+          const best = bestPlan && g.ps.some(p => p.id === bestPlan);
+          return `<li class="${best ? 'best' : ''}"><span>${esc(groupLabel(g, i))}${best ? '<small class="badge">今天建議</small>' : ''}</span><span class="num">${g.ps.length > 1 ? '各 ' : ''}+${g.v} 點</span></li>`;
+        }).join('')}</ul>`
+      : `<p class="zero-msg">0 點（${zeroReason(it, m, c)}）</p>`}</div>`);
+    const flag = !!m.needsCat;
+    const fav = isFav(m.name);
+    lines.push(`<div class="acts"><button type="button" class="favi${fav ? ' on' : ''}" data-act="fav" aria-pressed="${fav}">${STAR}<span>${fav ? '已在常用（點此移除）' : '加到常用'}</span></button><button type="button" class="rm" data-act="rm">移除這筆</button></div>`);
+    const open = openItems.has(it.id);
+    const payOpts = PAYS.map(([k]) => `<option value="${k}"${k === it.pay ? ' selected' : ''}>${esc(PAY_SHORT[k])}</option>`).join('');
+    return `<div class="item${open ? ' open' : ''}" data-id="${it.id}">
+      <div class="row-main">
+        <button type="button" class="nm" data-act="toggle" aria-expanded="${open}" aria-controls="det-${it.id}" title="${esc(m.name)}">${CHEV}<span>${esc(shortName(m.name))}</span>${flag ? '<i class="dot" title="有注意事項"></i>' : ''}</button>
+        <input class="amt-in" id="amt-${it.id}" data-act="amt" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="5" autocomplete="off" value="${it.amt || ''}" placeholder="$" aria-label="${esc(m.name)} 金額">
+        <select id="pay-${it.id}" data-act="pay" aria-label="${esc(m.name)} 付款方式">${payOpts}</select>
+        <span class="pts num${x.sure === 0 ? ' zero' : ''}">${x.sure}</span>
+      </div>
+      <div class="detail" id="det-${it.id}"${open ? '' : ' hidden'}>${lines.join('')}</div>
+    </div>`;
+  }).join('');
+  list.innerHTML = `<div class="cols"><span>店家</span><span>金額</span><span>付款方式</span><span>點數</span></div>${rows}`;
+}
+
+function renderMyStores() {
+  const names = Object.keys(state.custom);
+  $('msPromoted').innerHTML = state.promoted.length
+    ? `<div class="notice"><span>${esc(state.promoted.join('、'))} 已列入台新官網名單，改用官方規則。</span><button type="button" class="linkbtn" data-ms="ack">知道了</button></div>` : '';
+  $('myStores').innerHTML = names.length ? names.map(n => {
+    const m = getM(n);
+    const opts = CATS.map(c => `<option value="${c.id}"${!m.needsCat && c.id === m.catId ? ' selected' : ''}>${esc(c.label)}</option>`).join('');
+    return `<div class="ms-row" data-name="${esc(n)}">
+      <span class="ms-name">${esc(n)}<small>${m.created ? '自訂新增' : '改過的推測'}</small></span>
+      <select data-ms="cat" aria-label="${esc(n)} 的類別">${m.needsCat ? '<option value="" selected disabled>未選類別</option>' : ''}${opts}</select>
+      <button type="button" class="linkbtn" data-ms="del">${m.created ? '刪除' : '還原推測'}</button>
+    </div>`;
+  }).join('') : '<p class="ms-hint">還沒有自訂的店家。</p>';
+  if (!$('msCat').options.length) $('msCat').innerHTML = CATS.map(c => `<option value="${c.id}">${esc(c.label)}</option>`).join('');
+}
+
+function renderAll() {
+  renderToggles();
+  renderMyStores();
+  renderDay();
+  renderQuick();
+  const best = renderVerdict(totals());
+  renderItems(best);
+  if (lookupMerchant) renderMatrix(lookupMerchant);
+  save();
+}
+
+// While typing, swap in only the parts of each row that changed (name flag, points, details);
+// the amount fields and selects stay untouched, so focus and caret never move
+function softRender() {
+  const best = renderVerdict(totals());
+  const tmp = document.createElement('div');
+  renderItems(best, tmp);
+  const live = $('itemList').querySelectorAll('.item'), next = tmp.querySelectorAll('.item');
+  if (live.length !== next.length) renderItems(best);
+  else next.forEach((n, i) => ['.nm', '.pts', '.detail'].forEach(sel => live[i].querySelector(sel).replaceWith(n.querySelector(sel))));
+  save();
+}
+
+// ---------- Lookup matrix ----------
+let lookupMerchant = null;
+function renderMatrix(m) {
+  const c = ctx();
+  const cols = ['card', 'tspay', 'twqr', 'linepay'];
+  const rows = PLANS.map(p => cols.map(pay => {
+    const r = evaluate(m, pay, planOpen(p.id, c.date) ? p.id : 'none', c);
+    const extra = couponApplies(m, pay, c) ? 1.5 : 0;
+    return { sure: +(r.sure.rate + extra).toFixed(1), opt: +(r.opt.rate + extra).toFixed(1) };
+  }));
+  // Best (plan, payment) combinations among the given payment methods
+  const bestOf = pays => {
+    let best = { v: -1, combos: [] };
+    PLANS.forEach((p, i) => pays.forEach(pay => {
+      const v = rows[i][cols.indexOf(pay)].sure;
+      if (v > best.v) best = { v, combos: [[p, pay]] };
+      else if (v === best.v) best.combos.push([p, pay]);
+    }));
+    return best;
+  };
+  const describe = (b, withPay) => {
+    if (b.v <= 0) return '沒有回饋';
+    const byPlan = new Map();
+    b.combos.forEach(([p, pay]) => { if (!byPlan.has(p.name)) byPlan.set(p.name, []); byPlan.get(p.name).push(PAY_SHORT[pay]); });
+    if (byPlan.size > 3) return `切哪個方案都一樣，${fmtRate(b.v)}`;
+    return [...byPlan].map(([pn, ps]) => `切 ${pn}${withPay ? `，用 ${ps.join('／')}` : ''}`).join('；或 ') + `，${fmtRate(b.v)}`;
+  };
+  const all = bestOf(cols), cardOnly = bestOf(['card']);
+  const favLabel = isFav(m.name) ? '已在常用（點此移除）' : '加到常用店家';
+  const topRate = all.v;
+  const body = PLANS.map((p, i) => `<tr><td>${esc(p.name)}${!planOpen(p.id, c.date) ? ' <small class="why">這天不開放</small>' : p.id === 'holiday' && !c.holiday ? ' <small class="why">非假日</small>' : ''}</td>${rows[i].map(v => {
+    const cls = v.opt > v.sure ? 'm' : v.sure === 0 ? 'z' : v.sure === topRate ? 'top' : '';
+    const txt = v.opt > v.sure ? `${fmtRate(v.sure)} <small>(${fmtRate(v.opt)}?)</small>` : fmtRate(v.sure);
+    return `<td class="num ${cls}">${txt}</td>`;
+  }).join('')}</tr>`).join('');
+  $('matrix').innerHTML = `<div style="margin-top:14px"><p class="m-title">${esc(m.name)} <span class="chip">${esc(tagLabel(m))}</span><button type="button" class="linkbtn m-fav" data-favm="${esc(m.name)}">${favLabel}</button></p></div>
+    <div class="best-way">
+      <div><span class="lbl">最划算</span><b>${esc(describe(all, true))}</b></div>
+      ${cardOnly.v !== all.v ? `<div><span class="lbl">只能刷卡時</span>${esc(describe(cardOnly, false))}</div>` : ''}
+    </div>
+    ${m.note ? `<p class="m-note">${esc(m.note)}</p>` : ''}
+    <details class="full-table"${tableOpen ? ' open' : ''}><summary>看完整回饋率表（8 個方案 × 4 種付款方式）</summary>
+      <div class="matrix-wrap"><table>
+        <thead><tr><th>方案</th>${cols.map(k => `<th>${esc(PAY_SHORT[k])}</th>`).join('')}</tr></thead>
+        <tbody>${body}</tbody></table></div>
+      ${c.lp && c.lv2 ? '<p class="m-note">LINE Pay 欄已含加碼券 1.5%。</p>' : ''}
+    </details>`;
+}
+let tableOpen = false;
+
+// ---------- Search ----------
+function search(q) {
+  q = q.toLowerCase();
+  const hit = m => (m.name + ' ' + m.kw + ' ' + GROUP[m.group]).toLowerCase().includes(q);
+  return allMerchants().filter(hit).sort((a, b) =>
+    (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q)) ||
+    (b.name.toLowerCase().includes(q) - a.name.toLowerCase().includes(q)));
+}
+function makeSearch(input, box, onPick, opts = {}) {
+  const close = () => { box.hidden = true; box.innerHTML = ''; };
+  const show = () => {
+    const q = input.value.trim();
+    if (!q) return close();
+    const res = search(q).slice(0, 8);
+    box.innerHTML = res.length
+      ? res.map(m => `<div class="row"><button type="button" class="pick" data-name="${esc(m.name)}"><span>${esc(m.name)}</span><small>${esc(tagLabel(m))}</small></button></div>`).join('')
+      : `<p class="nohit">找不到相符的店家${opts.manual ? '。按「加入」會用你輸入的名稱新增，再到清單裡選類別' : ''}。</p>`;
+    box.hidden = false;
+  };
+  input.addEventListener('input', () => { delete input.dataset.pick; show(); });
+  // Coming back to the bar (focus or tap) shows suggestions for whatever text is still there
+  input.addEventListener('focus', show);
+  input.addEventListener('click', () => { if (box.hidden) show(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && opts.manual) {
+      // Manual mode: Enter keeps (or reopens) the suggestions and changes nothing; the user picks one or presses 加入
+      e.preventDefault();
+      if (box.hidden) show();
+      return;
+    }
+    if (e.key === 'Enter') { const b = box.querySelector('button'); if (b) { e.preventDefault(); b.click(); } }
+    if (e.key === 'Escape') close();
+    if (e.key === 'ArrowDown') { const b = box.querySelector('button'); if (b) { e.preventDefault(); b.focus(); } }
+  });
+  box.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.fav) {
+      // Update the star in place so the suggestion list stays open
+      toggleFav(b.dataset.fav);
+      const on = isFav(b.dataset.fav);
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); b.title = on ? '從常用移除' : '加到常用';
+      return;
+    }
+    if (opts.manual) {
+      input.value = b.dataset.name; input.dataset.pick = b.dataset.name; close(); input.focus();
+      input.dispatchEvent(new Event('change'));
+      return;
+    }
+    onPick(getM(b.dataset.name)); input.value = ''; close();
+  });
+  document.addEventListener('click', e => { if (!box.contains(e.target) && e.target !== input) close(); });
+}
+
+function addItem(m) {
+  if (state.example) { state.items = []; state.example = false; }
+  state.date = viewDate;
+  const id = Date.now() + Math.floor(Math.random() * 1000);
+  state.items.push({ id, name: m.name, amt: 0, pay: m.defaultPay || 'card' });
+  // Stores whose category can be changed open right away so the category can be checked
+  if (m.guess || m.custom) openItems.add(id);
+  renderAll();
+  const el = $('amt-' + id); if (el) el.focus();
+}
+
+// ---------- Events ----------
+$('lv2').addEventListener('change', e => { state.lv2 = e.target.checked; renderAll(); });
+// 我的店家
+$('myStores').addEventListener('change', e => {
+  const s = e.target.closest('[data-ms="cat"]'); if (!s) return;
+  state.custom[s.closest('.ms-row').dataset.name] = { cat: s.value };
+  renderAll();
+});
+$('settings').addEventListener('click', e => {
+  const b = e.target.closest('button[data-ms]'); if (!b) return;
+  if (b.dataset.ms === 'ack') state.promoted = [];
+  if (b.dataset.ms === 'del') delete state.custom[b.closest('.ms-row').dataset.name];
+  renderAll();
+});
+$('msName').addEventListener('input', () => { $('msAdd').disabled = !$('msName').value.trim(); $('msMsg').hidden = true; });
+$('msAdd').addEventListener('click', () => {
+  const n = $('msName').value.trim(), msg = $('msMsg');
+  if (!n) return;
+  const ex = BY_NAME.get(n);
+  if (ex && !ex.guess) { msg.textContent = `「${n}」在台新官網名單內，規則不能改。`; msg.hidden = false; return; }
+  state.custom[n] = { cat: $('msCat').value };
+  $('msName').value = ''; $('msAdd').disabled = true;
+  msg.textContent = `已新增「${n}」，之後搜尋就找得到。`; msg.hidden = false;
+  renderAll();
+});
+$('lpcoupon').addEventListener('change', e => { state.lpMonths[viewDate.slice(0, 7)] = e.target.checked; renderAll(); });
+$('day').addEventListener('change', e => { if (e.target.value) { viewDate = clampDate(e.target.value); renderAll(); } });
+$('toToday').addEventListener('click', () => { viewDate = clampDate(today()); renderAll(); });
+function clearAll() { state.items = []; state.example = false; state.date = viewDate; renderAll(); }
+$('clearAll').addEventListener('click', clearAll);
+$('dateNotice').addEventListener('click', e => { if (e.target.closest('[data-act="clear"]')) clearAll(); });
+
+// Run a change, then scroll back so the given row stays where it was on screen
+function keepRowInPlace(id, change) {
+  const row = () => document.querySelector(`.item[data-id="${id}"]`);
+  const before = row() && row().getBoundingClientRect().top;
+  change();
+  const after = row() && row().getBoundingClientRect().top;
+  if (before != null && after != null && after !== before) window.scrollBy(0, after - before);
+}
+$('itemList').addEventListener('click', e => {
+  const t = e.target.closest('[data-act="toggle"]');
+  if (t) {
+    const item = t.closest('.item'), id = +item.dataset.id;
+    keepRowInPlace(id, () => {
+      const open = !openItems.has(id);
+      if (open) openItems.add(id); else openItems.delete(id);
+      item.classList.toggle('open', open);
+      t.setAttribute('aria-expanded', open);
+      $('det-' + id).hidden = !open;
+    });
+    return;
+  }
+  const tg = e.target.closest('[data-act="cattoggle"]');
+  if (tg) {
+    const id = +tg.closest('.item').dataset.id;
+    keepRowInPlace(id, () => { if (catOpenItems.has(id)) catOpenItems.delete(id); else catOpenItems.add(id); renderAll(); });
+    return;
+  }
+  const cb = e.target.closest('[data-act="cat"]');
+  if (cb) {
+    const id = +cb.closest('.item').dataset.id, it = state.items.find(i => i.id === id);
+    keepRowInPlace(id, () => { state.custom[it.name] = { cat: cb.dataset.cat }; catOpenItems.delete(id); renderAll(); });
+    return;
+  }
+  const f = e.target.closest('[data-act="fav"]');
+  if (f) {
+    const id = +f.closest('.item').dataset.id, it = state.items.find(i => i.id === id);
+    keepRowInPlace(id, () => { toggleFav(it.name); renderAll(); });
+    return;
+  }
+  const b = e.target.closest('[data-act="rm"]'); if (!b) return;
+  const id = +b.closest('.item').dataset.id;
+  openItems.delete(id);
+  state.items = state.items.filter(i => i.id !== id);
+  if (!state.items.length) state.example = false;
+  renderAll();
+});
+$('itemList').addEventListener('input', e => {
+  if (e.target.dataset.act !== 'amt') return;
+  const it = state.items.find(i => i.id === +e.target.closest('.item').dataset.id);
+  // Amounts are capped at 5 digits (NT$99,999)
+  const digits = e.target.value.replace(/\D/g, '').slice(0, 5);
+  if (digits !== e.target.value) e.target.value = digits;
+  it.amt = +digits || 0;
+  state.example = false; state.date = viewDate;
+  softRender();
+});
+$('itemList').addEventListener('change', e => {
+  if (e.target.dataset.act !== 'pay') return;
+  const it = state.items.find(i => i.id === +e.target.closest('.item').dataset.id);
+  it.pay = e.target.value; state.example = false; state.date = viewDate;
+  softRender();
+});
+
+$('quick').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.rm) toggleFav(b.dataset.rm);
+  else addItem(getM(b.dataset.name));
+});
+$('quickReset').addEventListener('click', () => { state.quick = [...QUICK]; renderAll(); });
+$('matrix').addEventListener('click', e => { const b = e.target.closest('[data-favm]'); if (b) toggleFav(b.dataset.favm); });
+// 'toggle' does not bubble, so listen in the capture phase to remember whether the full table is open
+$('matrix').addEventListener('toggle', e => { if (e.target.classList.contains('full-table')) tableOpen = e.target.open; }, true);
+
+makeSearch($('addSearch'), $('addSugg'), addItem, { manual: true });
+// 加入 adds whatever is in the search bar: the picked suggestion, an exact name, the best match, or 其他一般店家
+const syncAddBtn = () => { $('addBtn').disabled = !$('addSearch').value.trim(); };
+$('addSearch').addEventListener('input', syncAddBtn);
+$('addSearch').addEventListener('change', syncAddBtn);
+$('addBtn').addEventListener('click', () => {
+  const input = $('addSearch'), q = input.value.trim();
+  if (!q) return;
+  // A picked suggestion or an exact name uses that store; any other text becomes the user's own store
+  let m = findByName(input.dataset.pick || q);
+  if (!m) { state.custom[q] = { cat: 'general', needsCat: true }; m = getM(q); }
+  input.value = ''; delete input.dataset.pick; syncAddBtn(); $('addSugg').hidden = true;
+  addItem(m);
+});
+makeSearch($('lookSearch'), $('lookSugg'), m => { lookupMerchant = m; renderMatrix(m); });
+
+lookupMerchant = BY_NAME.get('一般餐廳（實體店）');
+renderAll();
+</script>
+
+</body>
+</html>
