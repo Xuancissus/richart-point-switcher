@@ -90,7 +90,9 @@ button,input,select{font:inherit;color:inherit}
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 .banner .eyebrow{color:var(--on-tint)}
 .banner h1{font-size:var(--fs-title);font-weight:700}
-.banner .eyebrow,.banner h1,.banner .upd-msg{grid-column:1}
+.banner .eyebrow,.banner h1,.banner .banner-note,.banner .upd-msg{grid-column:1}
+/* Unofficial notice sits in the banner so it is the first thing read (white on red 5.31:1) */
+.banner .banner-note{grid-column:1 / -1;margin:0;font-size:var(--fs-footnote)}
 /* Update check: same text-button style as .linkbtn, in white on the red band */
 .banner .linkbtn{grid-column:2;grid-row:1 / span 2;color:var(--on-tint);text-decoration:underline;text-underline-offset:3px}
 .banner :focus-visible{outline-color:var(--on-tint)}
@@ -293,6 +295,7 @@ td.m{color:var(--warn)}
 <header class="banner"><div class="banner-in">
   <p class="eyebrow">台新 Richart 卡 · 規則抓取日 2026/10/23</p>
   <h1>權益聰明切</h1>
+  <p class="banner-note">個人試算工具，非台新銀行官方服務。本頁不會要求帳號、密碼或卡號，記錄只存在你的瀏覽器。</p>
   <button type="button" class="linkbtn" id="updBtn">檢查更新</button>
   <p class="upd-msg" id="updMsg" aria-live="polite" hidden></p>
 </div></header>
@@ -1289,7 +1292,7 @@ renderAll();
 // ---------- Update check ----------
 // The page cannot read Taishin's site itself (the browser blocks it), so this only checks whether
 // a newer version of this tool, with updated rules, has been published next to it (version.json).
-const APP_VERSION = '2026.10.24-4';
+const APP_VERSION = '2026.10.24-5';
 $('updBtn').addEventListener('click', async () => {
   const msg = $('updMsg'), btn = $('updBtn');
   msg.hidden = false; msg.textContent = '檢查中…'; btn.disabled = true;
