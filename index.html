@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="台新 Richart 卡切換刷試算：記錄今天的消費，算出 23:59 前該切換哪個方案。個人工具，非台新銀行官方服務。">
 <meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#D70C18">
 <title>權益聰明切</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23D70C18'/%3E%3Cpath d='M9 16.5l5 5 9-11' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
@@ -159,8 +160,9 @@ section{min-width:0}
 #items{grid-area:items}
 .notice{margin:0 0 var(--sp-3);padding:var(--sp-1) var(--sp-3);border-radius:var(--r-control);background:var(--warn-soft);color:var(--label);font-size:var(--fs-footnote);display:flex;gap:var(--sp-2);align-items:center;justify-content:space-between;flex-wrap:wrap}
 .item-list{display:grid}
-/* Amount fits 5 digits; payment fits its longest label plus the chevron */
-.cols,.row-main{display:grid;grid-template-columns:minmax(0,1fr) 4rem 5.5rem 2.2rem;column-gap:var(--sp-2);align-items:center}
+/* Amount fits 5 digits; payment fits its longest label plus the chevron.
+   px floors: inputs never go below 16px text, so the boxes must not shrink when iPhone text size is set smaller */
+.cols,.row-main{display:grid;grid-template-columns:minmax(0,1fr) max(68px,4rem) max(100px,5.5rem) max(37px,2.2rem);column-gap:var(--sp-2);align-items:center}
 .cols span:first-child{padding-left:16px}
 .cols{font-size:var(--fs-caption);color:var(--label-2);padding:0 0 var(--sp-2);border-bottom:var(--hairline) solid var(--separator)}
 .cols span:last-child{text-align:right}
@@ -917,7 +919,7 @@ function renderItems(bestPlan, list = $('itemList')) {
     lines.push(`<div class="d-sec"><p class="d-label">各方案點數</p>${groups.length
       ? `<ul class="perplan">${groups.map((g, i) => {
           const best = bestPlan && g.ps.some(p => p.id === bestPlan);
-          return `<li class="${best ? 'best' : ''}"><span>${esc(groupLabel(g, i))}${best ? '<small class="badge">今天建議</small>' : ''}</span><span class="num">${g.ps.length > 1 ? '各 ' : ''}+${g.v} 點</span></li>`;
+          return `<li class="${best ? 'best' : ''}"><span>${esc(groupLabel(g, i))}${best ? '<small class="badge">今天建議</small>' : ''}</span><span class="num">${g.ps.length > 1 ? '各 ' : ''}${g.v} 點</span></li>`;
         }).join('')}</ul>`
       : `<p class="zero-msg">0 點（${zeroReason(it, m, c)}）</p>`}</div>`);
     const flag = !!m.needsCat;
@@ -1218,7 +1220,7 @@ renderAll();
 // ---------- Update check ----------
 // The page cannot read Taishin's site itself (the browser blocks it), so this only checks whether
 // a newer version of this tool, with updated rules, has been published next to it (version.json).
-const APP_VERSION = '2026.10.24-2';
+const APP_VERSION = '2026.10.24-3';
 $('updBtn').addEventListener('click', async () => {
   const msg = $('updMsg'), btn = $('updBtn');
   msg.hidden = false; msg.textContent = '檢查中…'; btn.disabled = true;
